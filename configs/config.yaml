@@ -1,0 +1,30 @@
+device: cuda
+detector:
+  model_path: weights/yolov8_plate.pt
+  conf_threshold: 0.45
+  iou_threshold: 0.45
+  img_size: 640
+recognizer:
+  model_path: weights/resnet_crnn_iran.pt
+  backbone: resnet18
+  img_height: 64
+  img_width: 256
+  charset: "0123456789ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی"
+  pretrained: true
+camera:
+  source: 0
+  width: 1280
+  height: 720
+  fps: 30
+database:
+  path: data/vehicles.db
+display:
+  window_name: "Iranian LPR - Mine Gate"
+  font_scale: 1.2
+  thickness: 2
+preprocessing:
+  clahe_clip: 3.0
+  bilateral_d: 9
+  bilateral_sigma: 75
+  deskew_enabled: true
+  sharpen_enabled: true
