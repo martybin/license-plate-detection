@@ -1,7 +1,7 @@
 device: cuda
 detector:
   model_path: weights/yolov8_plate.pt
-  conf_threshold: 0.45
+  conf_threshold: 0.35
   iou_threshold: 0.45
   img_size: 640
 recognizer:
@@ -20,7 +20,7 @@ database:
   path: data/vehicles.db
 display:
   window_name: "Iranian LPR - Mine Gate"
-  font_scale: 1.2
+  font_scale: 1.1
   thickness: 2
 preprocessing:
   clahe_clip: 3.0
