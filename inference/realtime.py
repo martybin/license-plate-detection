@@ -19,7 +19,7 @@ class RealtimeLPR:
         with open(config_path, "r", encoding="utf-8") as f:
             self.cfg = yaml.safe_load(f)
 
-        device = self.cfg.get("device", "cuda")
+        device = self.cfg.get("device", "cpu")
         det_cfg = self.cfg["detector"]
         rec_cfg = self.cfg["recognizer"]
         cam_cfg = self.cfg["camera"]
@@ -95,24 +95,27 @@ class RealtimeLPR:
 
         if info:
             lines = [
-                f"Driver: {info.get('driver_name', '-')}",
-                f"National ID: {info.get('national_id', '-')}",
-                f"Truck: {info.get('truck_id', '-')}",
-                f"Company: {info.get('company', '-')}",
-                f"Status: {'ALLOWED' if info.get('allowed') else 'DENIED'}",
+                f"Driver : {info.get('driver_name', '-')}",
+                f"National ID : {info.get('national_id', '-')}",
+                f"Truck ID : {info.get('truck_id', '-')}",
+                f"Model : {info.get('vehicle_model', '-')}",
+                f"Company : {info.get('company', '-')}",
+                f"Status : {'ALLOWED' if info.get('allowed') else 'DENIED'}",
             ]
+            if info.get("note"):
+                lines.append(f"Note : {info.get('note')}")
             for line in lines:
                 cv2.putText(
                     out,
                     line,
                     (20, y0),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    self.font_scale * 0.8,
+                    self.font_scale * 0.75,
                     (255, 255, 255),
                     self.thickness,
                     cv2.LINE_AA,
                 )
-                y0 += 35
+                y0 += 32
         return out
 
     def run(self) -> None:
@@ -124,6 +127,9 @@ class RealtimeLPR:
             raise RuntimeError(f"Cannot open camera source: {self.source}")
 
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(
+            self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
+        )
 
         while True:
             ret, frame = cap.read()
@@ -139,8 +145,12 @@ class RealtimeLPR:
                 self.last_plate = plate
                 self.last_info = info
 
-            show_plate = self.last_plate if self.stable_count >= self.stable_threshold else None
-            show_info = self.last_info if self.stable_count >= self.stable_threshold else None
+            show_plate = (
+                self.last_plate if self.stable_count >= self.stable_threshold else None
+            )
+            show_info = (
+                self.last_info if self.stable_count >= self.stable_threshold else None
+            )
 
             display = self._draw_overlay(frame, show_plate, show_info, bbox, conf)
             cv2.imshow(self.window_name, display)
