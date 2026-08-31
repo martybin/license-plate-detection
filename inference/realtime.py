@@ -36,7 +36,7 @@ class RealtimeLPR:
         self.recognizer = PlateRecognizer(
             model_path=rec_cfg["model_path"],
             charset=rec_cfg["charset"],
-            backbone=rec_cfg.get("backbone", "resnet18"),
+            backbone=rec_cfg.get("backbone", "resnet34"),
             img_height=rec_cfg["img_height"],
             img_width=rec_cfg["img_width"],
             device=device,

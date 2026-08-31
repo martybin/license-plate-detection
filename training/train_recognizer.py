@@ -92,7 +92,7 @@ def train(config_path: str = "configs/config.yaml") -> None:
 
     model = ResNetCRNN(
         num_classes=len(rec_cfg["charset"]) + 1,
-        backbone=rec_cfg.get("backbone", "resnet18"),
+        backbone=rec_cfg.get("backbone", "resnet34"),
         pretrained=rec_cfg.get("pretrained", True),
     ).to(device)
 
