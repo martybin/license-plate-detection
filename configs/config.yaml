@@ -1,30 +1,65 @@
 device: cuda
+
 detector:
   model_path: weights/yolov8_plate.pt
   conf_threshold: 0.35
   iou_threshold: 0.45
   img_size: 640
+  max_det: 8
+  half: true          # fp16 on GPU; ignored on CPU
+  pad_ratio: 0.06     # grow each box slightly so tight boxes do not clip glyphs
+
 recognizer:
   model_path: weights/resnet_crnn_iran.pt
-  backbone: resnet34
+  backbone: resnet18
   img_height: 64
-  img_width: 256
+  img_width: 192
   charset: "0123456789ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی"
-  pretrained: true
+  half: true
+  pretrained: true    # ImageNet init, used by training only
+
 camera:
-  source: 0
+  source: 0           # index, video file, or rtsp:// URL
   width: 1280
   height: 720
   fps: 30
+
 database:
   path: data/vehicles.db
+  seed_demo: false    # keep false in production so real records are never seeded over
+
 display:
   window_name: "Iranian LPR - Mine Gate"
   font_scale: 1.1
   thickness: 2
+  fullscreen: true
+  hold_seconds: 5.0   # keep the driver panel up this long after the truck passes
+  font_path: ""       # a .ttf with Persian glyphs; auto-detected when empty
+
 preprocessing:
   clahe_clip: 3.0
   bilateral_d: 9
   bilateral_sigma: 75
   deskew_enabled: true
   sharpen_enabled: true
+  auto_enhance: true       # adapt to glare / dust / night per crop
+  vote_window_seconds: 2.0 # multi-frame fusion window
+  min_votes: 3
+  min_vote_score: 1.5
+
+training:
+  detector:
+    epochs: 100
+    batch: 16
+    img_size: 640
+    patience: 25
+    lr0: 0.001
+    base_model: yolov8s.pt
+  recognizer:
+    epochs: 60
+    batch: 32
+    lr: 0.0003
+    weight_decay: 0.0001
+    workers: 4
+    val_split: 0.05
+    augment: true

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 import numpy as np
 import torch
 from ultralytics import YOLO
+
+BBox = Tuple[int, int, int, int]
+
+
+class Detection(NamedTuple):
+    crop: np.ndarray
+    confidence: float
+    bbox: BBox
 
 
 class PlateDetector:
@@ -16,6 +24,9 @@ class PlateDetector:
         iou_threshold: float = 0.45,
         img_size: int = 640,
         device: str = "cuda",
+        pad_ratio: float = 0.06,
+        max_det: int = 8,
+        half: bool = True,
     ) -> None:
         self.device = device if torch.cuda.is_available() and device == "cuda" else "cpu"
         self.model = YOLO(str(model_path))
@@ -23,38 +34,76 @@ class PlateDetector:
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.img_size = img_size
+        self.pad_ratio = pad_ratio
+        self.max_det = max_det
+        self.use_half = half and self.device == "cuda"
 
-    def detect(self, image: np.ndarray) -> List[Tuple[np.ndarray, float, Tuple[int, int, int, int]]]:
+        if self.device == "cuda":
+            torch.backends.cudnn.benchmark = True
+        self._warmup()
+
+    def _warmup(self) -> None:
+        """Run one dummy frame so the first real vehicle is not the slow one."""
+        dummy = np.zeros((self.img_size, self.img_size, 3), dtype=np.uint8)
+        try:
+            self.model.predict(
+                source=dummy,
+                imgsz=self.img_size,
+                device=self.device,
+                half=self.use_half,
+                verbose=False,
+            )
+        except Exception:
+            # A warmup failure is never fatal; the real call will surface it.
+            pass
+
+    def _pad_box(self, x1: int, y1: int, x2: int, y2: int, w: int, h: int) -> BBox:
+        """Grow the box slightly so tight boxes do not clip the outer glyphs."""
+        pad_x = int((x2 - x1) * self.pad_ratio)
+        pad_y = int((y2 - y1) * self.pad_ratio)
+        return (
+            max(0, x1 - pad_x),
+            max(0, y1 - pad_y),
+            min(w, x2 + pad_x),
+            min(h, y2 + pad_y),
+        )
+
+    def detect(self, image: np.ndarray) -> List[Detection]:
         results = self.model.predict(
             source=image,
             conf=self.conf_threshold,
             iou=self.iou_threshold,
             imgsz=self.img_size,
             device=self.device,
+            half=self.use_half,
+            max_det=self.max_det,
             verbose=False,
         )
-        detections: List[Tuple[np.ndarray, float, Tuple[int, int, int, int]]] = []
-        if not results:
-            return detections
+        if not results or results[0].boxes is None or len(results[0].boxes) == 0:
+            return []
 
-        result = results[0]
-        if result.boxes is None:
-            return detections
-
+        boxes = results[0].boxes
         h, w = image.shape[:2]
-        for box in result.boxes:
-            conf = float(box.conf.item())
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w - 1, x2), min(h - 1, y2)
+        # Pull the whole tensor across the PCIe bus once instead of calling
+        # .item() per box, which forces a separate GPU sync each time.
+        xyxy = boxes.xyxy.cpu().numpy().astype(int)
+        confs = boxes.conf.cpu().numpy()
+
+        detections: List[Detection] = []
+        for (x1, y1, x2, y2), conf in zip(xyxy, confs):
+            x1, y1, x2, y2 = self._pad_box(x1, y1, x2, y2, w, h)
             if x2 <= x1 or y2 <= y1:
                 continue
-            crop = image[y1:y2, x1:x2].copy()
-            detections.append((crop, conf, (x1, y1, x2, y2)))
+            detections.append(Detection(image[y1:y2, x1:x2].copy(), float(conf), (x1, y1, x2, y2)))
         return detections
 
-    def detect_best(self, image: np.ndarray) -> Optional[Tuple[np.ndarray, float, Tuple[int, int, int, int]]]:
-        dets = self.detect(image)
-        if not dets:
+    def detect_best(self, image: np.ndarray) -> Optional[Detection]:
+        detections = self.detect(image)
+        if not detections:
             return None
-        return max(dets, key=lambda x: x[1])
+        # Prefer the largest confident plate: at a gate the nearest truck is the
+        # one at the barrier, and a bigger crop also reads more reliably.
+        return max(
+            detections,
+            key=lambda d: d.confidence * ((d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1])) ** 0.5,
+        )

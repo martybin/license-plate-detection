@@ -1,7 +1,17 @@
-ultralytics>=8.2.0
-torch>=2.1.0
-torchvision>=0.16.0
-opencv-python>=4.8.0
-numpy>=1.24.0
-pyyaml>=6.0
-Pillow>=10.0.0
+# Install PyTorch FIRST, matched to your CUDA version, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# then: pip install -r requirements.txt
+
+torch>=2.0
+torchvision>=0.15
+
+ultralytics>=8.1.0      # YOLOv8 plate detector
+opencv-python>=4.8.0    # use opencv-python-headless on a server with no display
+numpy>=1.24
+PyYAML>=6.0
+
+# Persian text on the gate monitor. cv2.putText cannot render Persian at all,
+# and without a shaper the letters render disconnected and in the wrong order.
+Pillow>=10.0
+arabic-reshaper>=3.0.0
+python-bidi>=0.4.2

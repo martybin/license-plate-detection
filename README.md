@@ -1,1353 +1,446 @@
-<div align="center">
+# سامانه تشخیص پلاک ایرانی — دروازه معدن
 
-# 🇮🇷 Iranian License Plate Recognition
-### Mine Gate • Transfer Learning Edition
+تشخیص بلادرنگ پلاک کامیون‌های معدن از تصویر دوربین، و نمایش مشخصات راننده روی مانیتور دروازه.
 
-**Real-Time Iranian License Plate Detection, Recognition & Vehicle Verification**
+سامانه از دو مدل تشکیل شده:
 
-<br/>
-
-![Python](https://img.shields.io/badge/Python-3.9%2B-blue?style=for-the-badge&logo=python)
-![YOLOv8](https://img.shields.io/badge/YOLOv8-Detection-orange?style=for-the-badge)
-![PyTorch](https://img.shields.io/badge/PyTorch-Deep%20Learning-ee4c2c?style=for-the-badge&logo=pytorch)
-![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-5c3ee8?style=for-the-badge&logo=opencv)
-![SQLite](https://img.shields.io/badge/SQLite-Database-003b57?style=for-the-badge&logo=sqlite)
-
-<br/>
-
-*A production-oriented computer vision pipeline for recognizing Iranian license plates at mining truck entry gates.*
-
-</div>
-
----
-
-## 📌 Overview
-
-**Iranian License Plate Recognition (Mine Gate)** is an end-to-end real-time LPR system designed specifically for **mining environments**.
-
-The system detects an Iranian license plate from a camera stream, preprocesses the detected plate, recognizes its characters, validates the Iranian plate format, and finally looks up the recognized plate in a local SQLite database to retrieve vehicle and driver information.
-
-The project uses **transfer learning at both major deep-learning stages**:
-
-```text
-Camera
-   │
-   ▼
-YOLOv8
-Plate Detection
-   │
-   ▼
-Image Preprocessing
-   │
-   ▼
-ResNet (ImageNet)
-   │
-   ▼
-BiLSTM
-   │
-   ▼
-CTC
-Character Recognition
-   │
-   ▼
-Iranian Plate Validation
-   │
-   ▼
-SQLite Vehicle Database
-   │
-   ▼
-Mine Gate Monitor
-```
-
-The system is intended to handle the challenging conditions commonly found around mines, including:
-
-- Dust-covered plates
-- Tilted plates
-- Low-contrast plates
-- Slightly blurred images
-- Variable lighting conditions
-- Real-time camera streams
-
----
-
-# ✨ Features
-
-- 🎯 **YOLOv8** license plate detection
-- 🧠 **Transfer learning from COCO** for plate detection
-- 🔤 **ResNet + BiLSTM + CTC** OCR architecture
-- 🧠 **ImageNet-pretrained ResNet** backbone
-- 🇮🇷 Iranian license plate format validation
-- 🧹 Advanced image preprocessing
-- 📹 Webcam support for development/testing
-- 📡 RTSP support for industrial cameras
-- 🗃️ SQLite vehicle and driver database
-- 🟢 Allowed vehicle detection
-- 🔴 Denied / unknown vehicle detection
-- 🖥️ Fullscreen mine-gate monitoring
-- 🔄 Stable consecutive readings to reduce recognition flickering
-- 🧩 Modular architecture
-- 🚀 Separate detector and recognizer training pipelines
-
----
-
-# 🧠 Transfer Learning
-
-Transfer learning is one of the main design decisions of this project.
-
-Instead of training every component from scratch, the system starts from models that have already learned useful visual representations from large datasets.
-
-## 🎯 YOLOv8 — COCO Pretraining
-
-The plate detector uses **YOLOv8**, initialized from COCO-pretrained weights and fine-tuned for license plate detection.
-
-This provides a strong starting point for learning the visual characteristics of license plates.
-
-## 🧠 ResNet — ImageNet Pretraining
-
-The OCR recognizer uses an **ImageNet-pretrained ResNet backbone**.
-
-The pretrained network already contains useful visual representations for:
-
-- Edges
-- Textures
-- Shapes
-- Character structures
-- Local visual patterns
-
-These features are then adapted to the Iranian license plate recognition task.
-
-## 🚀 Why Transfer Learning?
-
-Compared with training a CRNN completely from scratch, transfer learning provides:
-
-- Better generalization
-- Faster convergence
-- Less training data required
-- Stronger initial visual representations
-- Better performance on degraded real-world images
-
-> **Recommendation:** Keep `pretrained: true` in `configs/config.yaml`.
-
----
-
-# 🏗️ System Architecture
-
-```text
-┌──────────────────────────────────────────────┐
-│              📷 Camera Source                │
-│          Webcam / Industrial RTSP            │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│                 🎯 YOLOv8                    │
-│            License Plate Detection           │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│            🧹 Image Processing                │
-│                                              │
-│  Perspective Correction                     │
-│  Deskew                                      │
-│  Bilateral Filtering                         │
-│  CLAHE                                       │
-│  Sharpening                                  │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│        🧠 ResNet — ImageNet Pretrained       │
-│             Feature Extraction               │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│                  BiLSTM                      │
-│           Sequence Modeling                  │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│                   CTC                        │
-│            Character Decoding                │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│          🇮🇷 Plate Validation & Formatting    │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│              🗃️ SQLite Database              │
-│          Vehicle / Driver Lookup             │
-└──────────────────────┬───────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────┐
-│             🖥️ Gate Monitor                  │
-│       ALLOWED / DENIED / UNKNOWN             │
-└──────────────────────────────────────────────┘
-```
-
----
-
-# 📁 Project Structure
-
-```text
-iranian_lpr/
-│
-├── configs/
-│   └── config.yaml
-│
-├── models/
-│   ├── __init__.py
-│   ├── detector.py
-│   ├── recognizer.py
-│   └── pipeline.py
-│
-├── utils/
-│   ├── __init__.py
-│   ├── image_processing.py
-│   ├── plate_utils.py
-│   └── database.py
-│
-├── inference/
-│   ├── __init__.py
-│   └── realtime.py
-│
-├── training/
-│   ├── __init__.py
-│   ├── train_detector.py
-│   ├── train_recognizer.py
-│   └── prepare_dataset.py
-│
-├── weights/
-│
-├── data/
-│
-├── main.py
-├── requirements.txt
-└── README.md
-```
-
-## 📂 Directory Responsibilities
-
-| Directory / File | Responsibility |
-|---|---|
-| `configs/` | Central system configuration |
-| `models/` | Detection, recognition and complete inference pipeline |
-| `utils/` | Image processing, plate validation and database utilities |
-| `inference/` | Real-time camera inference |
-| `training/` | Dataset preparation and model training |
-| `weights/` | Trained model weights |
-| `data/` | Datasets and SQLite database |
-| `main.py` | Application entry point |
-| `requirements.txt` | Python dependencies |
-| `README.md` | Project documentation |
-
----
-
-# ⚙️ 1. Environment Setup
-
-Create a virtual environment:
-
-```bash
-python -m venv venv
-```
-
-### Linux / macOS
-
-```bash
-source venv/bin/activate
-```
-
-### Windows
-
-```bash
-venv\Scripts\activate
-```
-
-Install the project dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## 🖥️ Check CUDA
-
-To verify whether PyTorch can access CUDA:
-
-```bash
-python -c "import torch; print(torch.cuda.is_available())"
-```
-
-If the output is:
-
-```text
-True
-```
-
-CUDA is available to PyTorch.
-
-> ⚠️ The system can run on CPU, but **training will be very slow**. An NVIDIA GPU with CUDA support is strongly recommended.
-
----
-
-# 📦 2. Dataset Preparation
-
-The input dataset is expected to contain three splits:
-
-```text
-train/
-validation/
-test/
-```
-
-Each split contains:
-
-```text
-.jpg images
-.xml annotation files
-```
-
-The XML files contain **character-level annotations**.
-
----
-
-## 📝 Step 2.1 — Configure Dataset Paths
-
-Open:
-
-```text
-training/prepare_dataset.py
-```
-
-Configure the actual dataset locations:
-
-```python
-TRAIN_FOLDER = Path(r"/path/to/your/train")
-VAL_FOLDER   = Path(r"/path/to/your/validation")
-TEST_FOLDER  = Path(r"/path/to/your/test")      # or None
-```
-
----
-
-## 🚀 Step 2.2 — Prepare the Dataset
-
-Run:
-
-```bash
-python -m training.prepare_dataset
-```
-
-The preparation script automatically:
-
-1. Reads every XML annotation
-2. Extracts the annotated characters
-3. Sorts characters from left to right using `xmin`
-4. Reconstructs the complete plate text
-5. Renames/copies images for the OCR dataset
-6. Creates YOLO-format labels
-7. Creates a full-image bounding box for the plate detector
-8. Builds the required dataset directory structure
-9. Generates `data.yaml`
-
-For example, a reconstructed plate may look like:
-
-```text
-32ی45955
-```
-
----
-
-## 📊 Example Preparation Output
-
-```text
-YOLO dataset ready → data/plate_dataset
-  Train: 19381 images
-  Val  : 8364 images
-
-OCR dataset ready → data/ocr_dataset
-Total success: 27397 | Total failed: 348
-```
-
-The exact numbers depend on the dataset and annotation quality.
-
----
-
-# 🏋️ 3. Training
-
-The project contains two independently trainable deep-learning components:
-
-```text
-┌─────────────────────────┐
-│ YOLOv8                  │
-│ Plate Detection         │
-└─────────────────────────┘
-
-┌─────────────────────────┐
-│ ResNet + BiLSTM + CTC   │
-│ Character Recognition   │
-└─────────────────────────┘
-```
-
-They are trained separately.
-
----
-
-# 🎯 3.1 Train the Detector
-
-Run:
-
-```bash
-python -m training.train_detector
-```
-
-The detector uses YOLOv8 and is fine-tuned for Iranian license plate detection.
-
-After training, the best weights are automatically copied to:
-
-```text
-weights/yolov8_plate.pt
-```
-
-### ⏱️ Training Time
-
-Training approximately 20,000 images on CPU can take **several days**.
-
-For practical training times, use an NVIDIA GPU.
-
----
-
-# 🔤 3.2 Train the Recognizer
-
-Run:
-
-```bash
-python -m training.train_recognizer
-```
-
-The OCR architecture is:
-
-```text
-Image
-  │
-  ▼
-ResNet
-  │
-  ▼
-BiLSTM
-  │
-  ▼
-CTC
-  │
-  ▼
-Character Sequence
-```
-
-The trained recognizer weights are saved to:
-
-```text
-weights/resnet_crnn_iran.pt
-```
-
----
-
-# 🧠 Recognizer Backbones
-
-The supported ResNet backbones are configured in:
-
-```text
-configs/config.yaml
-```
-
-| Backbone | Speed | Accuracy | Recommended For |
+| مرحله | مدل | وظیفه | داده آموزش |
 |---|---|---|---|
-| `resnet18` | ⚡ Fastest | Good | Real-time inference |
-| `resnet34` | ⚖️ Balanced | Better | General deployment |
-| `resnet50` | 🧠 Heaviest | Highest | Maximum accuracy |
+| ۱. تشخیص محل پلاک | YOLOv8 | پیدا کردن پلاک در فریم کامل دوربین | تصاویر **صحنه کامل خودرو** |
+| ۲. خواندن متن پلاک | ResNet + BiLSTM + CTC | تبدیل برش پلاک به متن | تصاویر **برش پلاک** |
 
-Recommended starting point:
-
-```yaml
-recognizer:
-  backbone: resnet18
-  pretrained: true
 ```
-
-> **Always keep `pretrained: true`** unless you intentionally want to train the backbone from scratch.
-
----
-
-# 🗃️ 4. Vehicle & Driver Database
-
-The system **does not identify people directly from their faces or images**.
-
-Instead, it:
-
-```text
-License Plate
-      ↓
-OCR Text
-      ↓
-SQLite Lookup
-      ↓
-Vehicle / Driver Record
-```
-
-The database is automatically created at:
-
-```text
-data/vehicles.db
+دوربین (RTSP)
+    ↓  FrameGrabber  ← ترد جدا، حذف فریم‌های کهنه، اتصال مجدد خودکار
+   فریم
+    ↓  PlateDetector (YOLOv8)
+  برش پلاک  ──→ بهبود تصویر تطبیقی (غبار / نور مستقیم / شب / تاری)
+    ↓  PlateRecognizer (CRNN + CTC)  ← سه نسخه از هر برش در یک batch
+  متن خام
+    ↓  normalize → repair → validate
+    ↓  PlateVoter  ← رأی‌گیری روی چند فریم (کلید دقت بالا)
+  پلاک تأییدشده
+    ↓  VehicleDB (SQLite)
+ نمایش مشخصات راننده روی مانیتور
 ```
 
 ---
 
-## ➕ Add a Vehicle
-
-Example:
-
-```python
-from utils.database import VehicleDB
-
-db = VehicleDB("data/vehicles.db")
-
-db.upsert(
-    plate="15م59754",
-    driver_name="Ali Rezaei",
-    national_id="0011223344",
-    truck_id="TRK-087",
-    vehicle_model="Volvo FH16",
-    company="Sangan Mine",
-    allowed=1,
-    note="Main driver"
-)
-```
-
----
-
-## 🧾 Database Schema
-
-| Field | Description |
-|---|---|
-| `plate` | Exact plate text — primary key |
-| `driver_name` | Driver full name |
-| `national_id` | National ID number |
-| `truck_id` | Internal truck ID |
-| `vehicle_model` | Vehicle model |
-| `company` | Company / mine name |
-| `allowed` | `1` = allowed, `0` = denied |
-| `note` | Optional free-text note |
-
----
-
-# ⚙️ 5. Configuration
-
-Main configuration file:
-
-```text
-configs/config.yaml
-```
-
-Example:
-
-```yaml
-camera:
-  source: 0
-  # source: "rtsp://user:pass@192.168.1.100:554/stream1"
-
-recognizer:
-  backbone: resnet18
-  pretrained: true
-
-detector:
-  conf_threshold: 0.35
-```
-
----
-
-## 📹 Camera Configuration
-
-### Webcam
-
-For local testing:
-
-```yaml
-camera:
-  source: 0
-```
-
-### Industrial RTSP Camera
-
-For mine-gate deployment:
-
-```yaml
-camera:
-  source: "rtsp://user:pass@192.168.1.100:554/stream1"
-```
-
-The application architecture allows the camera source to be changed without modifying the main inference pipeline.
-
----
-
-# 🖥️ 6. Real-Time Inference
-
-Once the models and configuration are ready:
+## ۱. نصب
 
 ```bash
-python main.py
+cd license-plate-detection
+python -m venv .venv && source .venv/bin/activate
 ```
 
----
-
-## 💻 Local Webcam Test
-
-Configure:
-
-```yaml
-camera:
-  source: 0
-```
-
-Then run:
+اول PyTorch را متناسب با نسخه CUDA خود نصب کنید:
 
 ```bash
-python main.py
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-### Controls
-
-| Key | Action |
-|---|---|
-| `q` | Quit |
-| `Esc` | Quit |
-
-### Detection Status
-
-```text
-🟢 Green → Allowed vehicle
-🔴 Red   → Denied / Unknown vehicle
-```
-
-The recognized plate and driver information are displayed after **3 consecutive stable readings**.
-
-This mechanism helps prevent UI flickering caused by occasional incorrect OCR predictions.
-
----
-
-# ⛏️ 7. Mine Gate Deployment
-
-For production deployment:
-
-### 1️⃣ Connect the Hardware
-
-Connect:
-
-- Industrial camera
-- Gate computer
-- Guard/operator monitor
-
-### 2️⃣ Configure the RTSP Stream
-
-Edit:
-
-```text
-configs/config.yaml
-```
-
-Set:
-
-```yaml
-camera:
-  source: "rtsp://user:pass@192.168.1.100:554/stream1"
-```
-
-### 3️⃣ Start the Application
-
-```bash
-python main.py
-```
-
-The application opens in **fullscreen mode** on the gate monitor.
-
----
-
-## 👮 Example Gate Display
-
-```text
-Plate: 15 م 597 | 54   (0.91)
-Driver : Ali Rezaei
-National ID : 0011223344
-Truck ID : TRK-087
-Model : Volvo FH16
-Company : Sangan Mine
-Status : ALLOWED
-```
-
-This gives the gate operator an immediate view of:
-
-- Recognized plate
-- Recognition confidence
-- Driver
-- National ID
-- Truck ID
-- Vehicle model
-- Company / mine
-- Access status
-
----
-
-# 🔄 8. Complete Runtime Workflow
-
-The complete inference pipeline is:
-
-```text
-┌───────────────────┐
-│ 1. Camera Frame   │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 2. YOLOv8         │
-│ Plate Detection   │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 3. Plate Crop     │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 4. Perspective    │
-│    Correction     │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 5. Deskew         │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 6. Bilateral      │
-│    Filter         │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 7. CLAHE          │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 8. Sharpening     │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 9. ResNet         │
-│ Feature Extraction│
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 10. BiLSTM        │
-│ Sequence Modeling │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 11. CTC           │
-│ Character Decode  │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 12. Iranian Plate │
-│ Validation        │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 13. Plate         │
-│ Formatting        │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 14. SQLite Lookup │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 15. Stable Reading│
-│ Verification      │
-└─────────┬─────────┘
-          ▼
-┌───────────────────┐
-│ 16. Gate Monitor  │
-└───────────────────┘
-```
-
-### Step-by-step
-
-1. Capture a frame from the camera.
-2. YOLOv8 detects the license plate.
-3. Crop the detected plate.
-4. Correct perspective distortion.
-5. Deskew the plate.
-6. Apply bilateral filtering.
-7. Improve local contrast using CLAHE.
-8. Sharpen character boundaries.
-9. Extract visual features using ImageNet-pretrained ResNet.
-10. Model character sequences with BiLSTM.
-11. Decode the sequence using CTC.
-12. Validate the result against the Iranian plate format.
-13. Format the recognized plate.
-14. Search the plate in `data/vehicles.db`.
-15. Verify consecutive stable readings.
-16. Display the final result on the gate monitor.
-
----
-
-# 🇮🇷 Iranian Plate Validation
-
-The OCR output is passed through:
-
-```text
-utils/plate_utils.py
-```
-
-This component handles:
-
-- Iranian plate validation
-- Character/format checking
-- Plate formatting
-- Validation of the recognized sequence
-
-The expected structure is represented as:
-
-```text
-XX L YYY ZZ
-```
-
-Where:
-
-```text
-XX  → Numeric section
-L   → Iranian plate letter
-YYY → Numeric section
-ZZ  → Regional code
-```
-
-> Make sure the character set and formatting rules in `configs/config.yaml` and `utils/plate_utils.py` match the actual dataset and deployment requirements.
-
----
-
-# 🚀 9. Performance Recommendations
-
-## ⚡ Recommended Real-Time Configuration
-
-Start with:
-
-```text
-Detector   → YOLOv8s
-Recognizer → ResNet18 + BiLSTM + CTC
-Pretrained → true
-```
-
-This provides a good balance between speed and accuracy.
-
----
-
-## 🏎️ If Inference Speed Is the Priority
-
-Use:
-
-```text
-resnet18
-```
-
-and a lightweight YOLOv8 configuration.
-
----
-
-## 🎯 If Recognition Accuracy Is the Priority
-
-Consider:
-
-```text
-resnet34
-```
-
-or:
-
-```text
-resnet50
-```
-
-These are particularly useful for heavily degraded plates.
-
----
-
-## 📸 Improve the Dataset
-
-For better production robustness, collect difficult samples such as:
-
-- Dust-covered plates
-- Tilted plates
-- Night-time plates
-- Low-light images
-- Slightly blurred plates
-- Low-contrast plates
-- Different truck models
-- Different camera distances
-- Different camera angles
-- Different weather conditions
-- Different plate orientations
-
-> Hard samples from the actual mining environment are especially valuable for improving production performance.
-
----
-
-# 🧪 10. Troubleshooting
-
-| Problem | Solution |
-|---|---|
-| No images found during training | Run `python -m training.prepare_dataset` again |
-| Low recognition accuracy | Train longer, try `resnet34`/`resnet50`, and add more hard samples |
-| Slow inference | Use `resnet18` and a smaller input size |
-| Camera does not open | Check RTSP URL, credentials, network and camera availability |
-| Invalid plate format | Check the character set and `plate_utils.py` |
-| Weights are not saved | Ensure `weights/` exists and is writable |
-| CPU training is extremely slow | Use an NVIDIA GPU with CUDA-enabled PyTorch |
-| OCR result flickers | Verify camera quality and allow the stable-reading mechanism to work |
-| Poor results on dusty plates | Add more dusty samples to the training dataset |
-| Poor results at night | Add night-time and low-light samples |
-
----
-
-# 🏭 11. Production Deployment
-
-For production deployment at a mining gate, the following setup is recommended:
-
-```text
-                    ┌─────────────────┐
-                    │ Industrial      │
-                    │ Camera          │
-                    └────────┬────────┘
-                             │ RTSP
-                             ▼
-                    ┌─────────────────┐
-                    │ Gate Computer   │
-                    │                 │
-                    │ Iranian LPR     │
-                    │ Application     │
-                    └────────┬────────┘
-                             │
-                ┌────────────┴────────────┐
-                ▼                         ▼
-       ┌─────────────────┐       ┌─────────────────┐
-       │ SQLite Database │       │ Guard Monitor   │
-       │ vehicles.db     │       │ Fullscreen UI   │
-       └─────────────────┘       └─────────────────┘
-```
-
----
-
-## 🔄 Automatic Restart
-
-Run the application under:
-
-- `systemd`
-- `supervisord`
-
-This allows the service to restart automatically after:
-
-- Application crashes
-- System restarts
-- Unexpected failures
-
----
-
-## 📡 Fixed Industrial Camera
-
-Point:
-
-```yaml
-camera:
-  source: "rtsp://..."
-```
-
-to the permanent industrial camera stream.
-
-The camera should ideally have:
-
-- Stable positioning
-- Consistent viewing angle
-- Sufficient resolution
-- Adequate lighting
-- Reliable network connectivity
-
----
-
-## 🗃️ Database Synchronization
-
-Keep:
-
-```text
-data/vehicles.db
-```
-
-synchronized with the central vehicle management system when required.
-
-The database contains the information required to determine whether a recognized vehicle is allowed through the gate.
-
----
-
-## 🧩 Modular Model Replacement
-
-The architecture is modular.
-
-The detector and recognizer can be updated independently.
-
-For example:
-
-```text
-New detector weights
-        ↓
-models/detector.py
-        ↓
-Existing OCR pipeline
-```
-
-or:
-
-```text
-Existing detector
-        ↓
-New recognizer weights
-        ↓
-models/recognizer.py
-```
-
-This means that a new detector or recognizer can be trained and deployed without rewriting the entire application.
-
----
-
-# 📋 12. Quick Start
-
-If the project is already configured, follow these steps:
-
-### 1. Create environment
-
-```bash
-python -m venv venv
-```
-
-### 2. Activate environment
-
-Linux/macOS:
-
-```bash
-source venv/bin/activate
-```
-
-Windows:
-
-```bash
-venv\Scripts\activate
-```
-
-### 3. Install dependencies
+سپس بقیه:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure dataset paths
+### فونت فارسی (الزامی برای نمایش روی مانیتور)
 
-Edit:
-
-```text
-training/prepare_dataset.py
-```
-
-### 5. Prepare dataset
+`cv2.putText` اصلاً فارسی نمی‌کشد. بدون فونت، نام راننده به‌صورت `??????` نمایش داده می‌شود.
 
 ```bash
-python -m training.prepare_dataset
+sudo apt install fonts-vazir       # یا هر فونت فارسی دیگر
 ```
 
-### 6. Train detector
+اگر فونت در مسیر غیرمعمول است، در `configs/config.yaml` مسیر آن را بدهید:
+
+```yaml
+display:
+  font_path: "/usr/share/fonts/truetype/vazir/Vazir.ttf"
+```
+
+بررسی سلامت نصب:
+
+```bash
+python -c "import torch, cv2, ultralytics, arabic_reshaper; print('CUDA:', torch.cuda.is_available())"
+```
+
+---
+
+## ۲. دیتاست — این مهم‌ترین بخش است
+
+### ساختار مورد انتظار
+
+دیتاست شما [IR-LPR](https://github.com/mut-deep/IR-LPR) است و باید دقیقاً این چیدمان را داشته باشد:
+
+```
+/mnt/g/Bistun-kavir/
+├── train/            19381 عکس + XML   ← برش پلاک   → OCR
+├── validation/        2805
+├── test/              5559                          مجموع: 27,745
+├── car_train/        14670 عکس + XML   ← صحنه کامل  → دتکتور
+├── car_validation/    2120
+└── car_test/          4176                          مجموع: 20,966
+```
+
+هر عکس یک `.xml` هم‌نام کنارش دارد.
+
+| پوشه | محتوا | کدام مدل |
+|---|---|---|
+| `train` / `validation` / `test` | برش پلاک، بدون پسوند (`00005.jpg`) | **recognizer** (خواندن متن) |
+| `car_*` | خودرو کامل، `day_00010.jpg` و `night (726).jpg` | **detector** (پیدا کردن پلاک) |
+
+⚠️ توجه: تصاویر **خودرو** برای **دتکتور** هستند، نه recognizer. اگر جابه‌جا بدهید، دتکتور یاد می‌گیرد «کل تصویر پلاک است» و روی فریم دوربین هیچ پلاکی پیدا نمی‌کند.
+
+اندازه‌گیری روی داده واقعی شما:
+
+- برش پلاک: پلاک ۶۸٪ مساحت تصویر — برای OCR عالی، برای دتکشن بی‌فایده
+- تصاویر خودرو: تصویر میانه ۹۶۰×۹۶۰ (روز) و ۱۲۸۰×۹۶۰ (شب)، پلاک **۰.۳ تا ۰.۸٪** مساحت، عرض میانه ۱۲۰ تا ۱۴۰ پیکسل — دقیقاً چیزی که دتکتور لازم دارد
+- XMLهای `car_*` یک شیء صریح **`کل ناحیه پلاک`** دارند که کد از آن استفاده می‌کند
+- حدود **۱۴٪** تصاویر خودرو بیش از یک پلاک دارند (تا ۶ تا)؛ هر کدام یک خط جدا در label می‌شود
+
+### درباره سؤال شما: «باید اسم عکس را پلاک بگذاریم؟»
+
+تا حدی درست است، ولی **کار دستی لازم ندارید**:
+
+- برای **OCR**، بله — این پروژه برچسب را از نام فایل می‌خواند (`12ب34567.jpg`). این یک قرارداد همین پروژه است، نه یک قانون کلی.
+- ولی متن پلاک همین حالا داخل XMLهای شماست. `prepare_dataset.py` آن را می‌خواند و **خودکار** نام فایل را می‌سازد.
+- برای **دتکتور**، نام فایل اصلاً مهم نیست؛ فقط کادر پلاک مهم است.
+
+پس شما هیچ فایلی را دستی تغییر نام نمی‌دهید.
+
+### ساخت دیتاست‌ها — فقط یک دستور
+
+با چیدمان بالا، همه مسیرها خودکار پیدا می‌شوند:
+
+```bash
+cd ~/bistun_kavir/license-plate-detection
+python -m training.prepare_dataset --root /mnt/g/Bistun-kavir
+```
+
+اگر پوشه‌ها جای دیگری هستند، می‌توانید تک‌تک بدهید:
+
+```bash
+python -m training.prepare_dataset \
+  --plate-train /path/train --plate-val /path/validation --plate-test /path/test \
+  --car-train   /path/car_train --car-val /path/car_validation --car-test /path/car_test
+```
+
+خروجی:
+
+```
+data/ocr_dataset/       ← تصاویر با نام پلاک واقعی (برای recognizer)
+data/plate_dataset/     ← فرمت YOLO: images/ + labels/ + data.yaml (برای دتکتور)
+```
+
+**این سه خط را حتماً چک کنید:**
+
+```
+Boxes from explicit plate objects: 20966     ← باید تقریباً همه باشد
+Boxes from character union       : 0
+Median plate coverage of image area: 0.6%    ← باید زیر ۵٪ باشد
+```
+
+اگر `coverage` بالای ۳۵٪ شد، هشدار چاپ می‌شود — یعنی اشتباهی برش پلاک را به‌عنوان منبع دتکشن داده‌اید.
+
+---
+
+## ۳. آموزش
+
+### دتکتور
 
 ```bash
 python -m training.train_detector
 ```
 
-### 7. Train recognizer
+اگر روی برش پلاک اجرا شود، این هشدار را می‌بینید — جدی بگیرید:
+
+```
+*** WARNING ***
+The plate fills most of each image, so this source is a set of plate CROPS...
+```
+
+### مدل خواندن پلاک
 
 ```bash
 python -m training.train_recognizer
 ```
 
-### 8. Configure camera
+در ابتدای آموزش این خط را چاپ می‌کند:
 
-Edit:
-
-```text
-configs/config.yaml
+```
+CTC timesteps: 32 (longest label: 9)
 ```
 
-### 9. Populate database
+اگر تعداد timestep از بلندترین برچسب کمتر باشد، برنامه **فوراً خطا می‌دهد** — چون CTC در آن حالت از نظر ریاضی نمی‌تواند یاد بگیرد. (این دقیقاً باگی بود که در نسخه قبلی وجود داشت: ۸ timestep برای ۹ کاراکتر.)
 
-Add the required vehicle records to:
+هر epoch گزارش می‌دهد و **بهترین** مدل را بر اساس CER ذخیره می‌کند:
 
-```text
-data/vehicles.db
+```
+Epoch 007 | loss 0.3812 | val CER 0.0241 | plate acc 0.9106  <- saved
 ```
 
-### 10. Start the application
+- **CER** = نرخ خطای کاراکتر (کمتر بهتر) — هدف زیر ۰.۰۲
+- **plate acc** = درصد پلاک‌هایی که کاملاً درست خوانده شده‌اند — هدف بالای ۰.۹۵
 
-```bash
-python main.py
-```
+برای شرایط سخت معدن، augmentation واقعی در آموزش اعمال می‌شود: غبار اخرایی، فلاش خورشید، شب پرنویز، motion blur، پرسپکتیو و فشرده‌سازی JPEG.
+
+خروجی هر دو مرحله در `weights/` ذخیره می‌شود.
 
 ---
 
-# 📌 13. Important Files
+## ۴. اجرا
 
-| File | Purpose |
+```bash
+python main.py                              # با تنظیمات configs/config.yaml
+python main.py --source 0                   # وبکم
+python main.py --source video.mp4           # فایل ویدیو (برای تست)
+python main.py --source rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101
+```
+
+کلید `q` یا `Esc` برای خروج.
+
+اگر وزن‌ها موجود نباشند، پیام واضح می‌دهد و مراحل آموزش را یادآوری می‌کند.
+
+---
+
+## ۵. ثبت رانندگان
+
+بدون این مرحله دیتابیس خالی است و مانیتور چیزی برای نمایش ندارد.
+
+```bash
+python -m tools.register_vehicle add \
+  --plate "12ب34567" \
+  --driver "علی محمدی" \
+  --national-id 0012345678 \
+  --truck-id TRK-001 \
+  --model "بنز ۱۹۲۳" \
+  --company "معدن سنگان"
+```
+
+ممنوع کردن یک خودرو:
+
+```bash
+python -m tools.register_vehicle add --plate "56د12345" --driver "..." --denied --note "مدارک ناقص"
+```
+
+ورود گروهی از CSV (ستون اجباری فقط `plate`):
+
+```csv
+plate,driver_name,national_id,truck_id,vehicle_model,company,allowed,note
+12ب34567,علی محمدی,0012345678,TRK-001,بنز ۱۹۲۳,معدن سنگان,1,
+34ج67890,رضا کریمی,0098765432,TRK-014,ولوو FH,معدن سنگان,1,
+```
+
+```bash
+python -m tools.register_vehicle import drivers.csv
+python -m tools.register_vehicle list
+python -m tools.register_vehicle export backup.csv
+```
+
+پلاک‌های نامعتبر هنگام ورود رد می‌شوند و گزارش داده می‌شوند.
+
+---
+
+## ۶. راه‌اندازی روی دوربین معدن
+
+### الف) گرفتن آدرس RTSP
+
+از سازنده دوربین بگیرید. نمونه‌های رایج:
+
+| برند | الگو |
 |---|---|
-| `main.py` | Main application entry point |
-| `configs/config.yaml` | Central system configuration |
-| `models/detector.py` | YOLOv8 plate detector |
-| `models/recognizer.py` | ResNet + BiLSTM + CTC OCR |
-| `models/pipeline.py` | End-to-end processing pipeline |
-| `models/__init__.py` | Python package initialization |
-| `utils/image_processing.py` | Deskew, CLAHE, bilateral filter and sharpening |
-| `utils/plate_utils.py` | Iranian plate validation and formatting |
-| `utils/database.py` | SQLite vehicle/driver database |
-| `utils/__init__.py` | Python package initialization |
-| `inference/realtime.py` | Real-time camera loop and fullscreen overlay |
-| `inference/__init__.py` | Python package initialization |
-| `training/prepare_dataset.py` | XML/image dataset preparation |
-| `training/train_detector.py` | YOLOv8 training |
-| `training/train_recognizer.py` | OCR model training |
-| `training/__init__.py` | Python package initialization |
-| `weights/` | Trained model weights |
-| `data/` | Dataset and database storage |
-| `requirements.txt` | Python dependencies |
-| `README.md` | Project documentation |
+| Hikvision | `rtsp://user:pass@IP:554/Streaming/Channels/101` |
+| Dahua | `rtsp://user:pass@IP:554/cam/realmonitor?channel=1&subtype=0` |
 
----
-
-# 🛡️ 14. Production Checklist
-
-Before deploying the system at the mine gate:
-
-### Environment
-
-- [ ] Python environment created
-- [ ] Dependencies installed
-- [ ] PyTorch installed correctly
-- [ ] CUDA tested if using NVIDIA GPU
-
-### Dataset
-
-- [ ] Train folder configured
-- [ ] Validation folder configured
-- [ ] Test folder configured if available
-- [ ] XML annotations available
-- [ ] Dataset preparation completed
-- [ ] YOLO dataset generated
-- [ ] OCR dataset generated
-
-### Models
-
-- [ ] YOLOv8 detector trained
-- [ ] Detector weights available
-- [ ] OCR recognizer trained
-- [ ] Recognizer weights available
-- [ ] Correct ResNet backbone configured
-- [ ] `pretrained: true` used during training
-
-### Camera
-
-- [ ] Industrial camera connected
-- [ ] RTSP stream tested
-- [ ] Network connection stable
-- [ ] Camera position verified
-- [ ] Lighting conditions tested
-
-### Database
-
-- [ ] `data/vehicles.db` created
-- [ ] Required vehicles added
-- [ ] Driver information verified
-- [ ] `allowed` status verified
-- [ ] Database synchronization strategy defined if required
-
-### Application
-
-- [ ] `configs/config.yaml` configured
-- [ ] `python main.py` tested
-- [ ] Fullscreen monitor tested
-- [ ] Allowed vehicle flow tested
-- [ ] Denied vehicle flow tested
-- [ ] Unknown vehicle flow tested
-- [ ] Stable-reading behavior tested
-- [ ] Automatic restart configured
-
-### Real-World Testing
-
-- [ ] Dusty plates tested
-- [ ] Tilted plates tested
-- [ ] Blurred plates tested
-- [ ] Low-contrast plates tested
-- [ ] Night-time plates tested
-- [ ] Different truck models tested
-- [ ] Different plate distances tested
-
----
-
-# 🎯 15. End-to-End Example
-
-```text
-                 🚛 MINING TRUCK
-                       │
-                       ▼
-               📷 INDUSTRIAL CAMERA
-                       │
-                       ▼
-                  🎯 YOLOv8
-                PLATE DETECTION
-                       │
-                       ▼
-              🧹 IMAGE PROCESSING
-                       │
-                       ▼
-          🧠 RESNET + BILSTM + CTC
-                OCR RECOGNITION
-                       │
-                       ▼
-               🇮🇷 PLATE VALIDATION
-                       │
-                       ▼
-                 🗃️ DATABASE
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-         🟢 ALLOWED       🔴 DENIED
-              │                 │
-              └────────┬────────┘
-                       ▼
-                🖥️ GATE MONITOR
-```
-
----
-
-# 🔐 16. System Responsibilities
-
-The project separates the responsibilities of the individual components:
-
-```text
-YOLOv8
-  └── Where is the license plate?
-
-Image Processing
-  └── How can the plate image be improved?
-
-ResNet
-  └── What visual features exist in the plate?
-
-BiLSTM
-  └── What is the character sequence?
-
-CTC
-  └── How should the sequence be decoded?
-
-Plate Utils
-  └── Is this a valid Iranian plate?
-
-SQLite
-  └── Which vehicle/driver belongs to this plate?
-
-Realtime Pipeline
-  └── How should the result be displayed at the gate?
-```
-
-This separation keeps the system maintainable and makes future improvements easier.
-
----
-
-# 🔮 17. Future Improvements
-
-The current architecture provides a strong foundation for further improvements.
-
-Possible extensions include:
-
-- Multi-frame temporal voting
-- More advanced OCR decoding
-- Confidence-based OCR filtering
-- Automatic plate tracking
-- Multi-camera support
-- Centralized database synchronization
-- Gate barrier integration
-- Entry/exit logging
-- Historical vehicle reports
-- Night-specific preprocessing
-- Automatic exposure/brightness handling
-- Hard-example mining
-- Additional data augmentation
-- Model quantization for edge deployment
-- GPU/CPU inference optimization
-
----
-
-# 🏁 Conclusion
-
-**Iranian License Plate Recognition — Mine Gate** provides a complete pipeline for real-time Iranian license plate recognition in mining environments.
-
-The architecture combines:
-
-```text
-YOLOv8
-      +
-COCO Transfer Learning
-      +
-Image Processing
-      +
-ImageNet Transfer Learning
-      +
-ResNet
-      +
-BiLSTM
-      +
-CTC
-      +
-Iranian Plate Validation
-      +
-SQLite
-      +
-Real-Time Camera Processing
-      +
-Mine Gate Monitoring
-```
-
-After the dataset has been prepared, the two models have been trained, the vehicle database has been populated, and the industrial camera has been configured, the system can be launched with:
+تست مستقل قبل از هر چیز:
 
 ```bash
-python main.py
+ffplay "rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101"
 ```
 
-The result is a modular mine-gate LPR system capable of:
+### ب) نصب فیزیکی دوربین
 
-```text
-Detect → Enhance → Recognize → Validate → Lookup → Decide → Display
+این بخش بیشترین تأثیر را روی دقت دارد — بیشتر از هر تنظیم نرم‌افزاری:
+
+- **ارتفاع و زاویه:** پلاک باید تا حد امکان روبه‌رو دیده شود. زاویه افقی زیر ۳۰ درجه.
+- **اندازه پلاک در فریم:** عرض پلاک حداقل **۱۰۰ پیکسل**. اگر کمتر است، دوربین را نزدیک‌تر کنید یا zoom بدهید.
+- **سرعت شاتر:** برای کامیون در حال حرکت، شاتر سریع (۱/۵۰۰ یا سریع‌تر) لازم است وگرنه پلاک تار می‌شود. این را در تنظیمات خود دوربین ست کنید.
+- **نور شب:** IR illuminator روشن باشد. پلاک ایرانی بازتابنده است و در IR خوب دیده می‌شود.
+- **خورشید مستقیم:** دوربین را طوری بگذارید که خورشید پشت آن نباشد. WDR دوربین را فعال کنید.
+
+### ج) تنظیم config
+
+```yaml
+camera:
+  source: "rtsp://user:pass@192.168.1.64:554/Streaming/Channels/101"
+  width: 1280
+  height: 720
+
+database:
+  seed_demo: false        # در محیط واقعی حتماً false
+
+display:
+  fullscreen: true
+  hold_seconds: 5.0       # چند ثانیه مشخصات راننده روی صفحه بماند
+```
+
+### د) تنظیم دقت (بعد از دیدن نتیجه واقعی)
+
+```yaml
+detector:
+  conf_threshold: 0.35    # پلاک را دیر پیدا می‌کند؟ کم کنید. تشخیص اشتباه زیاد؟ زیاد کنید.
+
+preprocessing:
+  min_votes: 3            # کندتر ولی مطمئن‌تر؟ زیاد کنید (مثلاً 5)
+  vote_window_seconds: 2.0
+  auto_enhance: true      # بهبود تطبیقی برای غبار/نور/شب
+```
+
+منطق رأی‌گیری: یک فریم ممکن است به خاطر غبار یا بازتاب نور خراب باشد، ولی این خطاها بین فریم‌ها همبسته نیستند در حالی که پلاک واقعی هست. سامانه تا وقتی چند فریم روی یک پلاک توافق نکنند، مشخصات راننده را نشان نمی‌دهد.
+
+### ه) اجرای خودکار هنگام بوت (systemd)
+
+```bash
+sudo nano /etc/systemd/system/lpr-gate.service
+```
+
+```ini
+[Unit]
+Description=Mine Gate License Plate Recognition
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lucifer666
+WorkingDirectory=/home/lucifer666/bistun_kavir/license-plate-detection
+Environment="DISPLAY=:0"
+ExecStart=/home/lucifer666/bistun_kavir/license-plate-detection/.venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=graphical.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now lpr-gate
+sudo systemctl status lpr-gate
+journalctl -u lpr-gate -f          # مشاهده لاگ زنده
+```
+
+قطع شبکه دوربین باعث توقف سرویس نمی‌شود — `FrameGrabber` خودش تلاش مجدد می‌کند و روی صفحه «قطع ارتباط دوربین» نشان می‌دهد.
+
+---
+
+## ۷. مسیر رسیدن به محصول نهایی
+
+- [ ] نصب وابستگی‌ها + فونت فارسی
+- [ ] `python -m training.prepare_dataset --root /mnt/g/Bistun-kavir`
+- [ ] آموزش دتکتور — بررسی mAP در `runs/detect/iran_plate/`
+- [ ] آموزش OCR — رسیدن به CER زیر ۰.۰۲
+- [ ] تست با یک ویدیوی ضبط‌شده از خود معدن (`--source video.mp4`)
+- [ ] نصب فیزیکی دوربین طبق راهنمای بالا
+- [ ] ثبت رانندگان واقعی + `seed_demo: false`
+- [ ] تنظیم `conf_threshold` و `min_votes` بر اساس نتیجه واقعی
+- [ ] راه‌اندازی systemd
+- [ ] **مرحله طلایی:** جمع‌آوری ۵۰۰ تا ۱۰۰۰ تصویر از دوربین *خود معدن* (شب، غبار، آفتاب) و fine-tune کردن هر دو مدل روی آن‌ها
+
+آخرین مورد بیشترین تأثیر را دارد. هیچ دیتاست عمومی شرایط نوری و گرد و غبار معدن شما را ندارد.
+
+---
+
+## ۸. عیب‌یابی
+
+| نشانه | علت / راه‌حل |
+|---|---|
+| نام راننده `??????` است | فونت فارسی نصب نیست → `display.font_path` را ست کنید |
+| حروف فارسی جدا جدا | `pip install arabic-reshaper python-bidi` |
+| هیچ پلاکی پیدا نمی‌شود | دتکتور روی برش پلاک آموزش دیده → زیرمجموعه car لازم است |
+| پلاک پیدا می‌شود ولی متن غلط | CER مدل بالاست → آموزش بیشتر / fine-tune با داده معدن |
+| پلاک پیدا می‌شود ولی مشخصات نمی‌آید | پلاک در دیتابیس ثبت نشده → `register_vehicle list` |
+| مشخصات چشمک می‌زند | `hold_seconds` را زیاد کنید |
+| تأخیر روی RTSP | `detector.img_size` را به ۴۸۰ کم کنید یا `half: true` |
+| `CUDA out of memory` | `training.recognizer.batch` را کم کنید (۳۲ → ۱۶) |
+| خطای CTC timesteps | `recognizer.img_width` را زیاد کنید |
+| تصویر کند / پرش دارد | `detector.max_det` را کم کنید؛ GPU را بررسی کنید |
+
+---
+
+## ۹. ساختار پروژه
+
+```
+license-plate-detection/
+├── main.py                      نقطه ورود
+├── requirements.txt
+├── configs/config.yaml          همه تنظیمات
+├── models/
+│   ├── detector.py              YOLOv8 + padding کادر + fp16
+│   ├── recognizer.py            ResNet-CRNN + رمزگشایی CTC با اطمینان
+│   └── pipeline.py              چند-نسخه‌ای + PlateVoter
+├── utils/
+│   ├── image_processing.py      بهبود تطبیقی (غبار/نور/شب/تاری)
+│   ├── plate_utils.py           نرمال‌سازی، اعتبارسنجی، ترمیم
+│   ├── database.py              رجیستری SQLite
+│   └── overlay.py               رندر متن فارسی
+├── inference/realtime.py        FrameGrabber + حلقه نمایش
+├── training/
+│   ├── prepare_dataset.py       ساخت هر دو دیتاست از XML
+│   ├── train_detector.py
+│   └── train_recognizer.py      + augmentation شرایط سخت + CER
+└── tools/register_vehicle.py    مدیریت رانندگان
 ```
 
 ---
 
-<div align="center">
+## ۱۰. تغییرات این بازبینی
 
-### 🇮🇷 Built for Iranian Mining Environments
+### باگ‌های بحرانی (سامانه اصلاً کار نمی‌کرد)
 
-**Dust • Tilt • Blur • Low Contrast • Real-Time Monitoring**
+1. **CTC از نظر ریاضی غیرممکن بود** — ResNet با stride ۳۲، عرض ۲۵۶ را به ۸ timestep کاهش می‌داد، ولی پلاک ایرانی ۸ تا ۹ کاراکتر دارد. آموزش هرگز همگرا نمی‌شد. stride عرض در layer3/layer4 آزاد شد → ۳۲ timestep، به‌علاوه یک چک که در صورت تکرار، فوراً خطا بدهد.
 
-<br/>
+2. **هر پلاک ۹۰ درجه می‌چرخید** — در `correct_perspective` ترتیب نقاط مقصد با خروجی `_order_points` نمی‌خواند. ضمناً هر کانتوری را قبول می‌کرد (معمولاً یک حرف، نه قاب پلاک). حالا اعتبارسنجی نسبت ابعاد و پوشش اضافه شده و در غیر این صورت به deskew ساده برمی‌گردد.
 
-**YOLOv8 × ResNet × BiLSTM × CTC**
+3. **ناسازگاری آموزش و استنتاج** — آموزش با RGB رنگی، ولی `enhance_plate` خروجی خاکستری می‌داد و `_preprocess` آن را BGR تفسیر می‌کرد.
 
-</div>
+4. **کادرهای YOLO خارج از تصویر** — `write_yolo_label` مقادیر نرمال‌شده را جدا جدا clamp می‌کرد؛ کادری با مرکز ۰.۴۷ و عرض ۱.۰ مستطیل دیگری توصیف می‌کند. روی داده واقعی: ۲۴۹ از ۳۰۰ کادر خارج از محدوده بود → حالا ۰ از ۳۰۰.
+
+### اصلاح برچسب‌ها (تأییدشده روی هر ۲۷٬۷۴۵ فایل شما)
+
+| مشکل | تعداد | نتیجه |
+|---|---|---|
+| `_2.jpg` تکراری‌ها بی‌صدا حذف می‌شدند | ۲٬۲۵۵ | بازیابی شد |
+| `'الف'` به‌جای `ا` سه حرف می‌ماند | ۷۸ | اصلاح شد |
+| `'ژ (معلولین و جانبازان)'` با فاصله و پرانتز | ۳۴ | اصلاح شد |
+| `'ه‍'` با zero-width joiner | ۱٬۶۳۲ | اصلاح شد |
+
+نمونه‌های قابل استفاده: **۲۳٬۵۶۷ → ۲۵٬۸۲۴**
+
+### پایداری و عملکرد
+
+- **نشت اتصال SQLite** — هر فریم یک اتصال باز می‌کرد و هرگز نمی‌بست (`with` فقط commit می‌کند). حالا اتصال دائمی + کش.
+- **`seed_demo` رکورد واقعی سه راننده را در هر بوت بازنویسی می‌کرد** → `INSERT OR IGNORE` و پیش‌فرض خاموش.
+- **یک فریم ناموفق دوربین کل برنامه را می‌کشت** → ترد جدا با اتصال مجدد خودکار و حذف فریم‌های کهنه RTSP.
+- **`fliplr` پیش‌فرض اولتراlytics ۰.۵ است** — نصف مواقع پلاک آینه‌ای یاد می‌گرفت. صفر شد.
+- **`best.replace()`** بین فایل‌سیستم‌ها fail می‌کند → `copy2`.
+- **آموزش OCR نه validation داشت نه best-checkpoint** (فقط epoch آخر) → split + CER + accuracy + ذخیره بهترین + AMP.
+- **کل بخش `preprocessing` در config خوانده می‌شد ولی هرگز استفاده نمی‌شد** → حالا واقعاً وصل است.
+- fp16، warmup، و انتقال یکجای تنسور به‌جای `.item()` به ازای هر کادر.
+
+### قابلیت‌های جدید
+
+- **رأی‌گیری چندفریمی** (`PlateVoter`) — کلید دقت بالا در شرایط سخت.
+- **OCR چند-نسخه‌ای** — سه رندر از هر برش در یک batch؛ نسخه‌ای که ساختار پلاک معتبر دارد برنده می‌شود، حتی اگر اطمینان عددی کمتری داشته باشد.
+- **بهبود تصویر تطبیقی** — inpaint بازتاب خورشید، تخت‌کردن گرادیان نور، gamma شب، unsharp متناسب با تاری.
+- **رندر متن فارسی** — قبلاً نام راننده روی مانیتور `??????` بود.
+- **`repair_plate`** — بازسازی پلاک از خوانش کمی خراب CTC.
+- **`tools/register_vehicle.py`** — مدیریت رانندگان (add/list/import/export).
+
+---
+
+## نکته مهم درباره وزن‌های قبلی
+
+معماری recognizer تغییر کرده، پس **باید دوباره آموزش دهید**. پوشه `weights/` اصلاً وجود نداشت، بنابراین چیزی از دست نمی‌رود.
