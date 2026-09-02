@@ -50,9 +50,17 @@ preprocessing:
 capture:
   enabled: true
   output_dir: captures
-  save_raw: true
-  save_enhanced: true
+  save_full_frame: true      # the vehicle photo the operator audits against
+  save_raw: true             # plate crop exactly as the detector cut it
+  save_enhanced: true        # the variant the OCR actually read
+  annotate: true             # draw the plate box + confidences on the full frame
+  jpeg_quality: 90
+  # A plate is not re-saved until it has been absent this long, so one vehicle
+  # pass produces one capture instead of one every few seconds at the barrier.
   min_interval_seconds: 3.0
+  # Disk retention, 0 = keep everything. Set at least one on a 24/7 gate.
+  max_files: 20000
+  max_age_days: 30
 
 training:
   detector:
