@@ -11,6 +11,7 @@ from models.recognizer import PlateRecognizer, Recognition
 from utils.database import VehicleDB
 from utils.image_processing import correct_perspective, enhance_plate
 from utils.plate_utils import is_valid_iran_plate, repair_plate
+from utils.plate_saver import PlateSaver
 
 
 class PlateResult(NamedTuple):
@@ -20,11 +21,13 @@ class PlateResult(NamedTuple):
     det_conf: float
     ocr_conf: float
     confirmed: bool
+    crop: Optional[np.ndarray] = None
+    enhanced_crop: Optional[np.ndarray] = None
 
 
 class PlateVoter:
-    """Fuses readings across consecutive frames before trusting a plate.
-
+    """
+    Fuses readings across consecutive frames before trusting a plate.
     A single frame can be ruined by dust, a headlight flare or motion blur, but
     those failures are uncorrelated between frames while the true plate is not.
     Accumulating confidence-weighted votes over a short window is what turns a
@@ -81,6 +84,7 @@ class LPRPipeline:
         deskew: bool = True,
         enhance_params: Optional[dict] = None,
         voter: Optional[PlateVoter] = None,
+        saver: Optional[PlateSaver] = None,
     ) -> None:
         self.detector = detector
         self.recognizer = recognizer
@@ -88,10 +92,11 @@ class LPRPipeline:
         self.deskew = deskew
         self.enhance_params = enhance_params or {}
         self.voter = voter or PlateVoter()
+        self.saver = saver
 
     def _build_variants(self, crop: np.ndarray) -> List[np.ndarray]:
-        """Produce a few renderings of the same plate for the reader to choose from.
-
+        """
+        Produce a few renderings of the same plate for the reader to choose from.
         Enhancement helps a dusty or backlit plate but can hurt an already-clean
         one, so we submit both and let the OCR confidence decide rather than
         committing to a single preprocessing chain up front.
@@ -105,37 +110,66 @@ class LPRPipeline:
                 variants.append(enhance_plate(warped, **self.enhance_params))
         return variants
 
-    def _read_plate(self, crop: np.ndarray) -> Optional[Recognition]:
+    def _read_plate(self, crop: np.ndarray) -> Tuple[Optional[Recognition], Optional[np.ndarray]]:
         variants = self._build_variants(crop)
         # One batched forward pass for every variant: three crops cost barely
         # more than one on the GPU, and far less than three separate calls.
         readings = [r for r in self.recognizer.recognize_batch(variants) if r is not None]
         if not readings:
-            return None
+            return None, None
 
         repaired = [Recognition(repair_plate(r.text), r.confidence) for r in readings]
         valid = [r for r in repaired if is_valid_iran_plate(r.text)]
-        # A structurally valid plate always beats a higher-confidence garbage read.
-        return max(valid or repaired, key=lambda r: r.confidence)
+        best = max(valid or repaired, key=lambda r: r.confidence)
+
+        best_idx = max(
+            range(len(readings)),
+            key=lambda i: readings[i].confidence if is_valid_iran_plate(repair_plate(readings[i].text)) else -1.0,
+        )
+        enhanced_used = variants[best_idx] if best_idx < len(variants) else (variants[1] if len(variants) > 1 else crop)
+        return best, enhanced_used
 
     def process(self, frame: np.ndarray) -> PlateResult:
         best = self.detector.detect_best(frame)
         if best is None:
             confirmed = self.voter.confirmed()
-            return PlateResult(confirmed, self.db.lookup(confirmed) if confirmed else None, None, 0.0, 0.0, bool(confirmed))
+            return PlateResult(
+                confirmed,
+                self.db.lookup(confirmed) if confirmed else None,
+                None,
+                0.0,
+                0.0,
+                bool(confirmed),
+            )
 
-        reading = self._read_plate(best.crop)
+        reading, enhanced = self._read_plate(best.crop)
         if reading is None:
-            return PlateResult(None, None, best.bbox, best.confidence, 0.0, False)
+            return PlateResult(None, None, best.bbox, best.confidence, 0.0, False, best.crop)
 
         if is_valid_iran_plate(reading.text):
             self.voter.add(reading.text, reading.confidence)
 
         confirmed = self.voter.confirmed()
         if confirmed is None:
-            # Show the provisional read so the operator sees the system working,
-            # but withhold the driver record until the vote settles.
-            return PlateResult(reading.text, None, best.bbox, best.confidence, reading.confidence, False)
+            return PlateResult(
+                reading.text,
+                None,
+                best.bbox,
+                best.confidence,
+                reading.confidence,
+                False,
+                best.crop,
+                enhanced,
+            )
+
+        if self.saver is not None:
+            self.saver.save(
+                plate=confirmed,
+                raw_crop=best.crop,
+                enhanced_crop=enhanced,
+                ocr_conf=reading.confidence,
+                det_conf=best.confidence,
+            )
 
         return PlateResult(
             confirmed,
@@ -144,4 +178,6 @@ class LPRPipeline:
             best.confidence,
             reading.confidence,
             True,
+            best.crop,
+            enhanced,
         )

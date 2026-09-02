@@ -47,6 +47,13 @@ preprocessing:
   min_votes: 3
   min_vote_score: 1.5
 
+capture:
+  enabled: true
+  output_dir: captures
+  save_raw: true
+  save_enhanced: true
+  min_interval_seconds: 3.0
+
 training:
   detector:
     epochs: 100

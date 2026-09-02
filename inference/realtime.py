@@ -15,6 +15,7 @@ from models.recognizer import PlateRecognizer
 from utils.database import VehicleDB
 from utils.overlay import TextItem, TextRenderer, draw_panel
 from utils.plate_utils import format_plate_display
+from utils.plate_saver import PlateSaver
 
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
@@ -106,6 +107,7 @@ class RealtimeLPR:
         db_cfg = self.cfg["database"]
         disp_cfg = self.cfg["display"]
         pre_cfg = self.cfg.get("preprocessing", {})
+        cap_cfg = self.cfg.get("capture", {})
 
         self.detector = PlateDetector(
             model_path=det_cfg["model_path"],
@@ -130,6 +132,15 @@ class RealtimeLPR:
         self.db = VehicleDB(db_cfg["path"])
         if db_cfg.get("seed_demo", False):
             self.db.seed_demo()
+
+        saver = None
+        if cap_cfg.get("enabled", True):
+            saver = PlateSaver(
+                output_dir=cap_cfg.get("output_dir", "captures"),
+                save_raw=cap_cfg.get("save_raw", True),
+                save_enhanced=cap_cfg.get("save_enhanced", True),
+                min_interval_seconds=cap_cfg.get("min_interval_seconds", 3.0),
+            )
 
         self.pipeline = LPRPipeline(
             detector=self.detector,
