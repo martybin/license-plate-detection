@@ -133,13 +133,18 @@ class RealtimeLPR:
         if db_cfg.get("seed_demo", False):
             self.db.seed_demo()
 
-        saver = None
+        self.saver: Optional[PlateSaver] = None
         if cap_cfg.get("enabled", True):
-            saver = PlateSaver(
+            self.saver = PlateSaver(
                 output_dir=cap_cfg.get("output_dir", "captures"),
+                save_full_frame=cap_cfg.get("save_full_frame", True),
                 save_raw=cap_cfg.get("save_raw", True),
                 save_enhanced=cap_cfg.get("save_enhanced", True),
+                annotate=cap_cfg.get("annotate", True),
                 min_interval_seconds=cap_cfg.get("min_interval_seconds", 3.0),
+                jpeg_quality=cap_cfg.get("jpeg_quality", 90),
+                max_files=cap_cfg.get("max_files", 0),
+                max_age_days=cap_cfg.get("max_age_days", 0),
             )
 
         self.pipeline = LPRPipeline(
@@ -161,6 +166,7 @@ class RealtimeLPR:
                 min_votes=pre_cfg.get("min_votes", 3),
                 min_score=pre_cfg.get("min_vote_score", 1.5),
             ),
+            saver=self.saver,
         )
 
         self.grabber = FrameGrabber(cam_cfg["source"], cam_cfg["width"], cam_cfg["height"])
@@ -289,5 +295,9 @@ class RealtimeLPR:
             pass
         finally:
             self.grabber.stop()
+            if self.saver is not None:
+                # Drain the write queue before exiting, or the last few captures
+                # are lost on shutdown.
+                self.saver.close()
             self.db.close()
             cv2.destroyAllWindows()
