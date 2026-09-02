@@ -114,20 +114,23 @@ class LPRPipeline:
         variants = self._build_variants(crop)
         # One batched forward pass for every variant: three crops cost barely
         # more than one on the GPU, and far less than three separate calls.
-        readings = [r for r in self.recognizer.recognize_batch(variants) if r is not None]
-        if not readings:
+        readings = self.recognizer.recognize_batch(variants)
+
+        # Keep the variant index attached to its reading. Filtering the readings
+        # into a shorter list first would misalign the two, so the image saved
+        # for audit could be a different variant than the one that was read.
+        candidates = [
+            (i, Recognition(repair_plate(r.text), r.confidence))
+            for i, r in enumerate(readings)
+            if r is not None
+        ]
+        if not candidates:
             return None, None
 
-        repaired = [Recognition(repair_plate(r.text), r.confidence) for r in readings]
-        valid = [r for r in repaired if is_valid_iran_plate(r.text)]
-        best = max(valid or repaired, key=lambda r: r.confidence)
-
-        best_idx = max(
-            range(len(readings)),
-            key=lambda i: readings[i].confidence if is_valid_iran_plate(repair_plate(readings[i].text)) else -1.0,
-        )
-        enhanced_used = variants[best_idx] if best_idx < len(variants) else (variants[1] if len(variants) > 1 else crop)
-        return best, enhanced_used
+        valid = [c for c in candidates if is_valid_iran_plate(c[1].text)]
+        # A structurally valid plate always beats a higher-confidence garbage read.
+        best_idx, best = max(valid or candidates, key=lambda c: c[1].confidence)
+        return best, variants[best_idx]
 
     def process(self, frame: np.ndarray) -> PlateResult:
         best = self.detector.detect_best(frame)
@@ -163,10 +166,15 @@ class LPRPipeline:
             )
 
         if self.saver is not None:
+            # The full frame is the artefact the operator actually audits: it
+            # shows which vehicle the reading came from, which a plate crop alone
+            # cannot. The crops go with it to show what the OCR saw.
             self.saver.save(
                 plate=confirmed,
                 raw_crop=best.crop,
                 enhanced_crop=enhanced,
+                full_frame=frame,
+                bbox=best.bbox,
                 ocr_conf=reading.confidence,
                 det_conf=best.confidence,
             )
