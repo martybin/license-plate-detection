@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
-from typing import Deque, Dict, List, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, Deque, Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 
-from models.detector import BBox, PlateDetector
-from models.recognizer import PlateRecognizer, Recognition
+from models.recognizer import Recognition
 from utils.database import VehicleDB
 from utils.image_processing import correct_perspective, enhance_plate
 from utils.plate_utils import is_valid_iran_plate, repair_plate
-from utils.plate_saver import PlateSaver
+
+if TYPE_CHECKING:
+    # Annotations only. Importing these eagerly would pull in ultralytics and
+    # OpenCV just to describe a type, which costs seconds of startup and makes
+    # the pipeline impossible to exercise without the full model stack.
+    from models.detector import BBox, PlateDetector
+    from models.recognizer import PlateRecognizer
+    from utils.plate_saver import PlateSaver
 
 
 class PlateResult(NamedTuple):

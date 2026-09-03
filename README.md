@@ -288,6 +288,50 @@ timestamp,plate,det_conf,ocr_conf,full_frame,plate_raw,plate_enhanced
 
 ---
 
+## ۵.۶. تست
+
+```bash
+pip install pytest
+python -m pytest                 # کل مجموعه
+python -m pytest -v              # با جزئیات
+python -m pytest tests/test_plate_utils.py
+```
+
+تست‌ها بر اساس وابستگی‌هایشان تفکیک شده‌اند و اگر کتابخانه‌ای نصب نباشد آن بخش **skip** می‌شود، نه fail:
+
+| فایل | چه چیزی را پوشش می‌دهد | نیاز به |
+|---|---|---|
+| `test_plate_utils.py` | نرمال‌سازی، اعتبارسنجی، ترمیم پلاک | — |
+| `test_database.py` | رجیستری، کش، اینکه seed رکورد واقعی را خراب نکند | — |
+| `test_prepare_dataset.py` | خواندن XML، کادر پلاک، هندسه label یولو | — |
+| `test_image_processing.py` | بهبود تصویر، deskew، پرسپکتیو، I/O یونیکد | cv2 |
+| `test_plate_saver.py` | یک عکس در هر عبور، retention، صف، CSV | cv2 |
+| `test_pipeline.py` | رأی‌گیری چندفریمی، انتخاب نسخه، اتصال saver | torch |
+| `test_recognizer.py` | ظرفیت CTC، letterbox، رمزگشایی | torch |
+
+تست‌ها روی باگ‌های واقعی که قبلاً پیدا شدند قفل می‌زنند — مثلاً `test_enough_timesteps_for_a_full_plate` دوباره اجازه نمی‌دهد تعداد timestep زیر طول برچسب برود، و `test_saved_variant_matches_the_reading_despite_a_none` جلوی برگشت باگ جابه‌جایی ایندکس را می‌گیرد.
+
+### تست زنده با وبکم
+
+برای اینکه با چشم خودتان ببینید مدل چه می‌خواند:
+
+```bash
+python -m tools.live_test                  # وبکم، دتکتور + OCR
+python -m tools.live_test --ocr-only       # بدون دتکتور، کادر وسط تصویر
+python -m tools.live_test --image plate.jpg
+```
+
+کلیدها: `q` خروج، `s` ذخیره عکس، `space` توقف، `r` ریست رأی‌ها.
+
+**`--ocr-only` قبل از آموزش دتکتور مفید است:** دتکتور را دور می‌زند و هرچه داخل کادر وسط تصویر است را مستقیم به recognizer می‌دهد. پس می‌توانید فقط با مدل OCR تست کنید، بدون اینکه منتظر آموزش YOLO بمانید.
+
+دو نکته:
+
+- **دوربین لپ‌تاپ در WSL معمولاً در دسترس نیست.** این اسکریپت را از خود ویندوز اجرا کنید، یا با `--image` روی عکس تست کنید.
+- **دتکتور روی صحنه کامل خودرو آموزش دیده،** پس پلاکی که نزدیک دوربین بگیرید و کل تصویر را پر کند ممکن است پیدا نشود. برای تست نزدیک از `--ocr-only` استفاده کنید، یا پلاک را کمی دورتر بگیرید.
+
+---
+
 ## ۶. راه‌اندازی روی دوربین معدن
 
 ### الف) گرفتن آدرس RTSP
@@ -433,11 +477,14 @@ license-plate-detection/
 │   └── overlay.py               رندر متن فارسی
 │   └── plate_saver.py           آرشیو تصویری برای بازبینی (ترد جدا)
 ├── inference/realtime.py        FrameGrabber + حلقه نمایش
+├── tests/                       مجموعه تست pytest
 ├── training/
 │   ├── prepare_dataset.py       ساخت هر دو دیتاست از XML
 │   ├── train_detector.py
 │   └── train_recognizer.py      + augmentation شرایط سخت + CER
-└── tools/register_vehicle.py    مدیریت رانندگان
+└── tools/
+    ├── register_vehicle.py      مدیریت رانندگان
+    └── live_test.py             تست زنده با وبکم
 ```
 
 ---

@@ -11,6 +11,8 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 import cv2
 import numpy as np
 
+from utils.image_processing import imwrite_unicode
+
 CSV_HEADER = [
     "timestamp",
     "plate",
@@ -20,6 +22,8 @@ CSV_HEADER = [
     "plate_raw",
     "plate_enhanced",
 ]
+
+MAX_TRACKED_PLATES = 4096
 
 
 class _Job(NamedTuple):
@@ -151,9 +155,14 @@ class PlateSaver:
 
         # Bound the dedup table: a gate sees thousands of distinct plates over a
         # season and this would otherwise grow for the life of the process.
-        if len(self._last_seen) > 4096:
+        if len(self._last_seen) > MAX_TRACKED_PLATES:
             cutoff = now - max(self.event_gap * 4, 300.0)
             self._last_seen = {p: t for p, t in self._last_seen.items() if t >= cutoff}
+            if len(self._last_seen) > MAX_TRACKED_PLATES:
+                # Everything is still recent, so age alone frees nothing. Drop the
+                # oldest outright; without this the "bound" does not bound.
+                newest = sorted(self._last_seen.items(), key=lambda kv: kv[1])[-MAX_TRACKED_PLATES:]
+                self._last_seen = dict(newest)
             self._last_seen[plate] = now
         return True
 
@@ -210,8 +219,9 @@ class PlateSaver:
                 continue
             suffix = {"full_frame": "full", "plate_raw": "raw", "plate_enhanced": "enh"}[key]
             path = day_dir / f"{stem}_{suffix}.jpg"
-            if cv2.imwrite(str(path), image, self.jpeg_params):
-                written[key] = str(path.relative_to(self.output_dir))
+            if imwrite_unicode(path, image, self.jpeg_params):
+                # as_posix so the log reads the same on Windows and Linux.
+                written[key] = path.relative_to(self.output_dir).as_posix()
 
         self._append_csv(job, written)
         self.written += 1

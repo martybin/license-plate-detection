@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import warnings
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
@@ -14,6 +15,7 @@ import yaml
 from torch.utils.data import DataLoader, Dataset
 
 from models.recognizer import IMAGENET_MEAN, IMAGENET_STD, ResNetCRNN, letterbox_plate
+from utils.image_processing import imread_unicode
 from utils.plate_utils import normalize_iran_plate
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -147,14 +149,21 @@ class PlateOCRDataset(Dataset):
         self.img_width = img_width
         self.augment = augment
         self.seed = seed
+        self.read_failures = 0
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
         path, label = self.samples[idx]
-        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        # Every file here is named after its plate, so the path is non-ASCII and
+        # cv2.imread would return None on Windows -- silently training the whole
+        # run on blank images.
+        img = imread_unicode(path)
         if img is None:
+            self.read_failures += 1
+            if self.read_failures <= 5:
+                warnings.warn(f"Could not read {path}; using a blank image", RuntimeWarning)
             img = np.zeros((self.img_height, self.img_width, 3), dtype=np.uint8)
 
         if self.augment:

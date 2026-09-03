@@ -1,9 +1,39 @@
 from __future__ import annotations
 
-from typing import Dict
+from pathlib import Path
+from typing import Dict, List, Optional
 
 import cv2
 import numpy as np
+
+
+def imread_unicode(path: str | Path, flags: int = cv2.IMREAD_COLOR) -> Optional[np.ndarray]:
+    """Read an image whose path may contain non-ASCII characters.
+
+    cv2.imread goes through the platform's narrow-character API, so on Windows a
+    Persian filename silently returns None. Every file in data/ocr_dataset is
+    named after its plate, so this is the normal case here, not an edge case.
+    """
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+    except OSError:
+        return None
+    if data.size == 0:
+        return None
+    return cv2.imdecode(data, flags)
+
+
+def imwrite_unicode(path: str | Path, image: np.ndarray, params: Optional[List[int]] = None) -> bool:
+    """Write an image to a path that may contain non-ASCII characters."""
+    path = Path(path)
+    try:
+        ok, buffer = cv2.imencode(path.suffix or ".jpg", image, params or [])
+        if not ok:
+            return False
+        path.write_bytes(buffer.tobytes())
+        return True
+    except (cv2.error, OSError):
+        return False
 
 # An Iranian plate is roughly 4.5:1. Anything far outside this band is not a
 # plate boundary, so a warp derived from it would be actively harmful.
@@ -153,9 +183,12 @@ def deskew_plate(image: np.ndarray, max_angle: float = 25.0) -> np.ndarray:
     if coords is None or len(coords) < 20:
         return bgr
 
+    # minAreaRect's angle convention has changed between OpenCV releases (it
+    # reports (0, 90] on 4.5+ and [-90, 0) on 5.x), and which edge it calls the
+    # width also varies. Folding into [-45, 45] gives the same tilt either way;
+    # testing only `angle > 45` silently missed real tilts on some versions.
     angle = cv2.minAreaRect(coords)[-1]
-    if angle > 45:
-        angle -= 90
+    angle = (angle + 45.0) % 90.0 - 45.0
     if abs(angle) < 0.5 or abs(angle) > max_angle:
         return bgr
 
