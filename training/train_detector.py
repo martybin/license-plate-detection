@@ -47,7 +47,7 @@ def train(
     device = "cuda" if cfg.get("device") == "cuda" else "cpu"
     model = YOLO(train_cfg.get("base_model", "yolov8s.pt"))
 
-    model.train(
+    results = model.train(
         data=str(data_yaml),
         epochs=int(train_cfg.get("epochs", 100)),
         imgsz=int(train_cfg.get("img_size", cfg["detector"]["img_size"])),
@@ -79,18 +79,51 @@ def train(
         close_mosaic=10,
     )
 
-    best = Path("runs/detect/iran_plate/weights/best.pt")
+    best = _locate_best(model, results)
     target = Path(cfg["detector"]["model_path"]).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    if not best.exists():
-        print("Training finished but best.pt was not found.")
-        return
+    if best is None:
+        raise FileNotFoundError(
+            "Training finished but best.pt could not be located. Look under "
+            "runs/detect/ and copy weights/best.pt to "
+            f"{target} by hand."
+        )
 
     # copy2, not replace: replace() fails across filesystems and would also strip
     # the run directory of the very checkpoint you may want to resume from.
     shutil.copy2(best, target)
-    print(f"\nDetector training finished. Weights copied to: {target}")
+    print(f"\nDetector training finished.\n  best.pt : {best}\n  copied to: {target}")
+
+
+def _locate_best(model, results) -> Path | None:
+    """Find the checkpoint ultralytics actually wrote.
+
+    The output directory is not simply `project/name`: recent ultralytics
+    versions resolve `project` against their own runs directory, so a hardcoded
+    `runs/detect/iran_plate/weights/best.pt` silently misses and the trained
+    model is never copied into `weights/`. Ask the trainer where it put it.
+    """
+    # Only the trainer's own report is authoritative. A hardcoded run path is
+    # not just unreliable, it is dangerous: if an older run happens to sit
+    # there, it would be deployed in place of the model just trained.
+    candidates = [
+        getattr(getattr(model, "trainer", None), "best", None),
+        getattr(results, "save_dir", None),
+        getattr(getattr(model, "trainer", None), "save_dir", None),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.is_dir():
+            path = path / "weights" / "best.pt"
+        if path.is_file():
+            return path
+
+    # Last resort: newest best.pt anywhere under a runs/ tree.
+    found = sorted(Path.cwd().rglob("runs/**/weights/best.pt"), key=lambda p: p.stat().st_mtime)
+    return found[-1] if found else None
 
 
 if __name__ == "__main__":

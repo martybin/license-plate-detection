@@ -24,6 +24,8 @@ CSV_HEADER = [
 ]
 
 MAX_TRACKED_PLATES = 4096
+# Retention sweeps the whole capture tree; run it every N writes, not every one.
+RETENTION_EVERY = 50
 
 
 class _Job(NamedTuple):
@@ -62,6 +64,7 @@ class PlateSaver:
         max_files: int = 0,
         max_age_days: float = 0.0,
         queue_size: int = 32,
+        retention_every: int = RETENTION_EVERY,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -76,6 +79,7 @@ class PlateSaver:
         self.jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)]
         self.max_files = int(max_files)
         self.max_age_days = float(max_age_days)
+        self.retention_every = max(1, int(retention_every))
 
         self.csv_path = self.output_dir / "captures.csv"
         self.dropped = 0
@@ -225,8 +229,12 @@ class PlateSaver:
 
         self._append_csv(job, written)
         self.written += 1
+        # Retention walks the whole capture tree, so running it on every write
+        # would mean a 20000-file stat() sweep per vehicle. Sweep on the first
+        # capture -- so a gate that restarts often still prunes -- then amortise.
         if self.max_files or self.max_age_days:
-            self._enforce_retention()
+            if self.written == 1 or self.written % self.retention_every == 0:
+                self._enforce_retention()
 
     def _append_csv(self, job: _Job, written: Dict[str, str]) -> None:
         new_file = not self.csv_path.exists()
@@ -248,18 +256,24 @@ class PlateSaver:
 
     def _enforce_retention(self) -> None:
         """Keep the capture folder from filling the disk on a 24/7 gate."""
-        images: List[Path] = sorted(
-            (p for p in self.output_dir.rglob("*.jpg") if p.is_file()),
-            key=lambda p: p.stat().st_mtime,
-        )
+        # stat() once per file and keep the value; calling it again inside the
+        # filters below would triple the syscalls on a 20000-file tree.
+        dated = []
+        for path in self.output_dir.rglob("*.jpg"):
+            try:
+                dated.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+        dated.sort()
 
         doomed: List[Path] = []
+        keep = dated
         if self.max_age_days > 0:
             cutoff = time.time() - self.max_age_days * 86400
-            doomed = [p for p in images if p.stat().st_mtime < cutoff]
-        if self.max_files > 0 and len(images) - len(doomed) > self.max_files:
-            remaining = [p for p in images if p not in set(doomed)]
-            doomed += remaining[: len(remaining) - self.max_files]
+            doomed = [p for mtime, p in dated if mtime < cutoff]
+            keep = [(m, p) for m, p in dated if m >= cutoff]
+        if self.max_files > 0 and len(keep) > self.max_files:
+            doomed += [p for _, p in keep[: len(keep) - self.max_files]]
 
         for path in doomed:
             try:

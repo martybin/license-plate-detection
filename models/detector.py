@@ -38,9 +38,26 @@ class PlateDetector:
         self.max_det = max_det
         self.use_half = half and self.device == "cuda"
 
+        # Ultralytics renamed `half` to `quantize` in 8.4 and warns on every
+        # predict call for the old name -- 30 lines a second into journalctl on a
+        # live gate. Resolve the supported name once and only pass it when fp16
+        # is actually wanted.
+        self._predict_extra = {}
+        if self.use_half:
+            self._predict_extra[self._half_kwarg()] = True
+
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
         self._warmup()
+
+    @staticmethod
+    def _half_kwarg() -> str:
+        try:
+            from ultralytics.cfg import DEFAULT_CFG_DICT
+
+            return "quantize" if "quantize" in DEFAULT_CFG_DICT else "half"
+        except ImportError:
+            return "half"
 
     def _warmup(self) -> None:
         """Run one dummy frame so the first real vehicle is not the slow one."""
@@ -50,8 +67,8 @@ class PlateDetector:
                 source=dummy,
                 imgsz=self.img_size,
                 device=self.device,
-                half=self.use_half,
                 verbose=False,
+                **self._predict_extra,
             )
         except Exception:
             # A warmup failure is never fatal; the real call will surface it.
@@ -62,10 +79,10 @@ class PlateDetector:
         pad_x = int((x2 - x1) * self.pad_ratio)
         pad_y = int((y2 - y1) * self.pad_ratio)
         return (
-            max(0, x1 - pad_x),
-            max(0, y1 - pad_y),
-            min(w, x2 + pad_x),
-            min(h, y2 + pad_y),
+            int(max(0, x1 - pad_x)),
+            int(max(0, y1 - pad_y)),
+            int(min(w, x2 + pad_x)),
+            int(min(h, y2 + pad_y)),
         )
 
     def detect(self, image: np.ndarray) -> List[Detection]:
@@ -75,9 +92,9 @@ class PlateDetector:
             iou=self.iou_threshold,
             imgsz=self.img_size,
             device=self.device,
-            half=self.use_half,
             max_det=self.max_det,
             verbose=False,
+            **self._predict_extra,
         )
         if not results or results[0].boxes is None or len(results[0].boxes) == 0:
             return []

@@ -31,6 +31,17 @@ def charset() -> str:
 
 
 @pytest.fixture
+def voc_xml():
+    """Factory writing a Pascal-VOC file shaped like the IR-LPR annotations.
+
+    Exposed as a fixture rather than an importable helper on purpose: `tests` is
+    not a package here, and ultralytics ships a top-level package of that name,
+    so `from tests.conftest import ...` silently resolves to theirs.
+    """
+    return make_voc_xml
+
+
+@pytest.fixture
 def db(tmp_path):
     """A VehicleDB on a throwaway file, closed afterwards."""
     from utils.database import VehicleDB

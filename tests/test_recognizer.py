@@ -16,8 +16,8 @@ from models.recognizer import (  # noqa: E402
     ResNetCRNN,
     letterbox_plate,
 )
-from tests.conftest import CHARSET  # noqa: E402
 
+CHARSET = "0123456789ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی"
 NUM_CLASSES = len(CHARSET) + 1
 LONGEST_LABEL = 9  # 2 digits + letter + 3 digits + 2-digit region
 

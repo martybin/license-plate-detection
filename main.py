@@ -25,10 +25,11 @@ def check_weights(config_path: Path) -> None:
 
     if missing:
         details = "\n".join(f"  - {name}: {path}" for name, path in missing)
-        raise FileNotFoundError(
-            f"Missing model weights:\n{details}\n"
+        # A bare traceback on a gate console tells the operator nothing useful.
+        raise SystemExit(
+            f"Missing model weights:\n{details}\n\n"
             "Train them first:\n"
-            "  python -m training.prepare_dataset\n"
+            "  python -m training.prepare_dataset --root /mnt/g/Bistun-kavir\n"
             "  python -m training.train_detector\n"
             "  python -m training.train_recognizer"
         )
@@ -42,7 +43,7 @@ def main() -> None:
 
     config_path = Path(args.config)
     if not config_path.exists():
-        raise FileNotFoundError(f"Config not found: {config_path}")
+        raise SystemExit(f"Config not found: {config_path}")
 
     check_weights(config_path)
 

@@ -4,7 +4,7 @@ import argparse
 import random
 import warnings
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -150,9 +150,23 @@ class PlateOCRDataset(Dataset):
         self.augment = augment
         self.seed = seed
         self.read_failures = 0
+        self._rng: Optional[random.Random] = None
 
     def __len__(self) -> int:
         return len(self.samples)
+
+    def _worker_rng(self) -> random.Random:
+        """One RNG per worker whose state advances with every sample drawn.
+
+        Deriving the seed from the sample index instead made the augmentation a
+        pure function of that index: every epoch produced byte-identical images,
+        so 60 epochs saw one fixed dusty/blurred variant per plate rather than a
+        fresh one each time. torch.initial_seed() differs per worker, which keeps
+        the workers from drawing the same stream.
+        """
+        if self._rng is None:
+            self._rng = random.Random(torch.initial_seed() + self.seed)
+        return self._rng
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
         path, label = self.samples[idx]
@@ -167,9 +181,7 @@ class PlateOCRDataset(Dataset):
             img = np.zeros((self.img_height, self.img_width, 3), dtype=np.uint8)
 
         if self.augment:
-            # Seeded per (epoch-agnostic) index + torch seed so workers diverge.
-            rng = random.Random((self.seed + idx) * 2654435761 + torch.initial_seed() % 10_000_019)
-            img = augment_plate(img, rng)
+            img = augment_plate(img, self._worker_rng())
 
         img = letterbox_plate(img, self.img_height, self.img_width)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0

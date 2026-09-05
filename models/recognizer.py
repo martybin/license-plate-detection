@@ -40,7 +40,7 @@ class ResNetCRNN(nn.Module):
     def __init__(
         self,
         num_classes: int,
-        backbone: str = "resnet34",
+        backbone: str = "resnet18",
         pretrained: bool = True,
         rnn_hidden: int = 256,
         rnn_layers: int = 2,

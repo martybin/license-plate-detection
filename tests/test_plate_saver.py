@@ -172,14 +172,15 @@ class TestCsvLog:
 
 class TestRetention:
     def test_max_files_evicts_oldest(self, tmp_path, frame, crop):
-        saver = make(tmp_path, min_interval_seconds=0.0, save_enhanced=False, max_files=6)
+        saver = make(tmp_path, min_interval_seconds=0.0, save_enhanced=False,
+                     max_files=6, retention_every=1)
         for i in range(10):
             saver.save(f"1{i}ب34567", crop, None, frame)
         saver.close()
         assert len(images(saver)) <= 6
 
     def test_max_age_removes_stale_files(self, tmp_path, frame, crop):
-        saver = make(tmp_path, min_interval_seconds=0.0, max_age_days=1.0)
+        saver = make(tmp_path, min_interval_seconds=0.0, max_age_days=1.0, retention_every=1)
         saver.save("11ب34567", crop, crop, frame)
         saver._queue.join()
 
@@ -233,3 +234,16 @@ class TestHotPath:
         with make(tmp_path) as saver:
             saver.save(PLATE, crop, crop, frame)
         assert saver.written == 1
+
+    def test_retention_runs_on_the_first_capture_after_a_restart(self, tmp_path, frame, crop):
+        """A gate that restarts often must still prune, not wait for N writes."""
+        first = make(tmp_path, min_interval_seconds=0.0, save_enhanced=False, max_files=2)
+        for i in range(4):
+            first.save(f"1{i}ب34567", crop, None, frame)
+        first.close()
+        before = len(images(first))
+
+        restarted = make(tmp_path, min_interval_seconds=0.0, save_enhanced=False, max_files=2)
+        restarted.save("99ق12345", crop, None, frame)
+        restarted.close()
+        assert len(images(restarted)) <= 2 < before

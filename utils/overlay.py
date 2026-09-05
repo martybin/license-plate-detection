@@ -63,13 +63,45 @@ class TextRenderer:
             )
 
     @staticmethod
-    def _resolve_font(font_path: Optional[str]) -> Optional[str]:
-        if font_path and Path(font_path).exists():
-            return font_path
-        for candidate in _FONT_CANDIDATES:
-            if Path(candidate).exists():
+    def _covers_persian(font_path: str) -> bool:
+        """Check the font actually has Persian glyphs, not just that it loaded.
+
+        A Latin-only font renders every Persian letter as an identical .notdef
+        box. That looks like the system is working while the monitor shows rows
+        of tofu, which is worse than falling back to ASCII and warning.
+        """
+        try:
+            font = ImageFont.truetype(font_path, 24)
+        except OSError:
+            return False
+
+        def bitmap(char: str) -> bytes:
+            image = Image.new("L", (40, 40), 0)
+            ImageDraw.Draw(image).text((4, 4), char, font=font, fill=255)
+            return image.tobytes()
+
+        notdef = bitmap("￿")  # a codepoint no font defines
+        return all(bitmap(ch) != notdef for ch in "پژکگی")
+
+    @classmethod
+    def _resolve_font(cls, font_path: Optional[str]) -> Optional[str]:
+        candidates = ([font_path] if font_path else []) + list(_FONT_CANDIDATES)
+        fallback = None
+        for candidate in candidates:
+            if not candidate or not Path(candidate).exists():
+                continue
+            if cls._covers_persian(candidate):
                 return candidate
-        return None
+            if fallback is None:
+                fallback = candidate
+
+        if fallback is not None:
+            warnings.warn(
+                f"{fallback} has no Persian glyphs; driver names will render as boxes. "
+                "Install a Persian font (e.g. fonts-vazir) and set display.font_path.",
+                RuntimeWarning,
+            )
+        return fallback
 
     def _font(self, size: int) -> Optional[ImageFont.FreeTypeFont]:
         if self.font_path is None:

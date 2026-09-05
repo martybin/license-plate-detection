@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -38,6 +38,9 @@ class FrameGrabber:
         self.height = height
         self.reconnect_delay = reconnect_delay
         self._frame: Optional[np.ndarray] = None
+        # Monotonic counter so the consumer can tell a fresh frame from the one
+        # it already processed. Without it the loop re-reads the same buffer.
+        self._seq = 0
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -76,6 +79,7 @@ class FrameGrabber:
 
             with self._lock:
                 self._frame = frame
+                self._seq += 1
 
         if cap is not None:
             cap.release()
@@ -85,9 +89,18 @@ class FrameGrabber:
         self._thread.start()
         return self
 
-    def read(self) -> Optional[np.ndarray]:
+    def read(self) -> Tuple[Optional[np.ndarray], int]:
+        """Return the newest frame and its sequence number.
+
+        The caller compares the sequence against the last one it processed. The
+        camera delivers ~30 frames a second while the loop can spin far faster,
+        so without this the same frame is recognised repeatedly and each pass
+        casts another vote -- letting one frame alone satisfy `min_votes`.
+        """
         with self._lock:
-            return None if self._frame is None else self._frame.copy()
+            if self._frame is None:
+                return None, self._seq
+            return self._frame.copy(), self._seq
 
     def stop(self) -> None:
         self._stop.set()
@@ -181,18 +194,22 @@ class RealtimeLPR:
         self.last_confirmed_at = 0.0
         self._fps = 0.0
 
-    def _held_result(self, result: PlateResult) -> Optional[PlateResult]:
-        """Keep a confirmed driver on screen briefly after the truck passes.
-
-        Previously a single frame without a detection blanked the panel, so the
-        operator saw the driver's details flicker in and out.
-        """
-        now = time.monotonic()
+    def _record_result(self, result: PlateResult) -> None:
+        """Latch a confirmation. Called once per processed frame, never on redraw."""
         if result.confirmed and result.plate:
             self.last_result = result
-            self.last_confirmed_at = now
-            return result
-        if self.last_result and now - self.last_confirmed_at <= self.hold_seconds:
+            self.last_confirmed_at = time.monotonic()
+
+    def _held_result(self) -> Optional[PlateResult]:
+        """The confirmation still worth showing, or None once it has aged out.
+
+        Kept separate from recording so a redraw cannot keep refreshing the hold
+        timer: if the camera drops, the panel must still expire on schedule
+        instead of freezing the last driver on the monitor indefinitely.
+        """
+        if self.last_result is None:
+            return None
+        if time.monotonic() - self.last_confirmed_at <= self.hold_seconds:
             return self.last_result
         self.last_result = None
         return None
@@ -215,7 +232,10 @@ class RealtimeLPR:
         plate_text = held.plate if held else result.plate
 
         if plate_text or info:
-            panel_lines = 1 + (7 if info else 0)
+            # plate line, then either the 7 driver lines or the single
+            # "not registered" line. Sizing for only the plate left the second
+            # line hanging outside the panel.
+            panel_lines = 1 + (7 if info else 1)
             draw_panel(out, (12, 12), (12 + 30 * self.base_size, 24 + panel_lines * line_h))
 
         if plate_text:
@@ -269,9 +289,13 @@ class RealtimeLPR:
             cv2.setWindowProperty(self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         last_tick = time.monotonic()
+        last_seq = -1
+        last_draw = 0.0
+        result = PlateResult(None, None, None, 0.0, 0.0, False)
+
         try:
             while True:
-                frame = self.grabber.read()
+                frame, seq = self.grabber.read()
                 if frame is None:
                     # Camera not up yet: keep the window responsive instead of
                     # exiting, which is what the old loop did on the first drop.
@@ -279,16 +303,25 @@ class RealtimeLPR:
                         break
                     continue
 
-                result = self.pipeline.process(frame)
-                held = self._held_result(result)
-
                 now = time.monotonic()
-                dt = now - last_tick
-                last_tick = now
-                if dt > 0:
-                    self._fps = 0.9 * self._fps + 0.1 * (1.0 / dt) if self._fps else 1.0 / dt
+                is_new = seq != last_seq
+                if is_new:
+                    last_seq = seq
+                    result = self.pipeline.process(frame)
+                    self._record_result(result)
 
-                cv2.imshow(self.window_name, self._draw_overlay(frame, result, held))
+                    dt = now - last_tick
+                    last_tick = now
+                    if dt > 0:
+                        self._fps = 0.9 * self._fps + 0.1 * (1.0 / dt) if self._fps else 1.0 / dt
+
+                # Redraw on every new frame, and otherwise at a slow idle rate so
+                # the hold timer and the camera-status line stay live without
+                # burning the CPU repainting an unchanged picture.
+                if is_new or now - last_draw >= 0.1:
+                    last_draw = now
+                    cv2.imshow(self.window_name, self._draw_overlay(frame, result, self._held_result()))
+
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     break
         except KeyboardInterrupt:
