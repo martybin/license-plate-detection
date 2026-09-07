@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 import random
 import warnings
+from collections import defaultdict
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -201,6 +202,36 @@ def collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor, int]]):
     )
 
 
+def split_by_plate(
+    samples: Sequence[Tuple[Path, str]], val_split: float, seed: int = 1337
+) -> Tuple[List[Tuple[Path, str]], List[Tuple[Path, str]]]:
+    """Hold out whole plates, never individual files.
+
+    prepare_dataset writes repeat sightings of one plate as `<plate>_2.jpg`, so a
+    file-level split drops near-identical photos of the same vehicle into both
+    train and validation. The model then scores itself on pictures it has
+    effectively memorised and the reported CER comes out better than the truth.
+    """
+    by_plate: Dict[str, List[Tuple[Path, str]]] = defaultdict(list)
+    for item in samples:
+        by_plate[item[1]].append(item)
+
+    plates = sorted(by_plate)
+    random.Random(seed).shuffle(plates)
+
+    target = len(samples) * val_split
+    val: List[Tuple[Path, str]] = []
+    val_plates = set()
+    for plate in plates:
+        if len(val) >= target:
+            break
+        val.extend(by_plate[plate])
+        val_plates.add(plate)
+
+    train = [item for plate in plates if plate not in val_plates for item in by_plate[plate]]
+    return train, val
+
+
 def scan_samples(root: Path, charset: str, min_len: int = 5, max_len: int = 10) -> List[Tuple[Path, str]]:
     samples: List[Tuple[Path, str]] = []
     skipped = 0
@@ -289,10 +320,9 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
     if not samples:
         raise FileNotFoundError(f"No usable samples under {data_root}. Run prepare_dataset first.")
 
-    rng = random.Random(1337)
-    rng.shuffle(samples)
-    n_val = max(1, int(len(samples) * float(train_cfg.get("val_split", 0.05))))
-    val_samples, train_samples = samples[:n_val], samples[n_val:]
+    train_samples, val_samples = split_by_plate(
+        samples, float(train_cfg.get("val_split", 0.05)), seed=1337
+    )
     print(f"Train: {len(train_samples)} | Val: {len(val_samples)} | device: {device}")
 
     common = dict(charset=charset, img_height=rec_cfg["img_height"], img_width=rec_cfg["img_width"])

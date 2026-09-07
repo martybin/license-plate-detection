@@ -125,3 +125,73 @@ class TestDatasetItem:
             image, _, _ = ds[0]
         assert image.shape == (3, 64, 192)
         assert ds.read_failures == 1
+
+
+class TestSplitByPlate:
+    """Validation must hold out whole plates, not individual files.
+
+    prepare_dataset writes repeat sightings as `<plate>_2.jpg`. Splitting by file
+    put near-identical photos of one vehicle on both sides, so the model scored
+    itself on images it had effectively memorised.
+    """
+
+    def _samples(self, distinct=200, repeats=40, seed=0):
+        rng = random.Random(seed)
+        plates = [f"{11 + i % 89}ب{i % 1000:03d}{11 + i % 89}" for i in range(distinct)]
+        plates = list(dict.fromkeys(plates))
+        out = [(Path(f"{p}.jpg"), p) for p in plates]
+        for i in range(repeats):
+            p = plates[rng.randrange(len(plates))]
+            out.append((Path(f"{p}_{i}.jpg"), p))
+        return out
+
+    def test_no_plate_on_both_sides(self):
+        from training.train_recognizer import split_by_plate
+
+        train, val = split_by_plate(self._samples(), 0.2, seed=1)
+        assert set(l for _, l in train).isdisjoint(set(l for _, l in val))
+
+    def test_every_file_is_used_exactly_once(self):
+        from training.train_recognizer import split_by_plate
+
+        samples = self._samples()
+        train, val = split_by_plate(samples, 0.2, seed=1)
+        assert len(train) + len(val) == len(samples)
+        assert {p for p, _ in train} | {p for p, _ in val} == {p for p, _ in samples}
+
+    def test_repeat_sightings_stay_together(self):
+        from training.train_recognizer import split_by_plate
+
+        samples = [
+            (Path("11ب22233.jpg"), "11ب22233"),
+            (Path("11ب22233_2.jpg"), "11ب22233"),
+            (Path("11ب22233_3.jpg"), "11ب22233"),
+            (Path("44ج55566.jpg"), "44ج55566"),
+        ]
+        train, val = split_by_plate(samples, 0.5, seed=0)
+        for side in (train, val):
+            labels = [l for _, l in side]
+            if "11ب22233" in labels:
+                assert labels.count("11ب22233") == 3
+
+    def test_val_size_is_close_to_requested(self):
+        from training.train_recognizer import split_by_plate
+
+        samples = self._samples(distinct=500, repeats=100)
+        _, val = split_by_plate(samples, 0.1, seed=2)
+        assert 0.05 <= len(val) / len(samples) <= 0.2
+
+    def test_deterministic_for_a_given_seed(self):
+        from training.train_recognizer import split_by_plate
+
+        samples = self._samples()
+        a = split_by_plate(samples, 0.2, seed=7)
+        b = split_by_plate(samples, 0.2, seed=7)
+        assert [p.name for p, _ in a[1]] == [p.name for p, _ in b[1]]
+
+    def test_single_plate_dataset_does_not_crash(self):
+        from training.train_recognizer import split_by_plate
+
+        samples = [(Path("11ب22233.jpg"), "11ب22233")]
+        train, val = split_by_plate(samples, 0.5, seed=0)
+        assert len(train) + len(val) == 1
