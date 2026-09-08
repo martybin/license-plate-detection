@@ -303,13 +303,24 @@ def cmd_import(args) -> None:
 
 
 def main() -> None:
+    # These are accepted on either side of the subcommand. argparse normally
+    # forces parent-level options to come first, which nobody expects:
+    # `autolabel_plates label --dry-run` is the natural way to type it.
+    # SUPPRESS keeps the subparser copies from clobbering the parent's value
+    # when the flag is not repeated.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", default=argparse.SUPPRESS)
+    common.add_argument("--out", default=argparse.SUPPRESS)
+    common.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default="configs/config.yaml")
     parser.add_argument("--out", default="data/ocr_dataset", help="where accepted images land")
     parser.add_argument("--dry-run", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    label = sub.add_parser("label", help="read an unlabelled folder and propose labels")
+    label = sub.add_parser("label", parents=[common],
+                           help="read an unlabelled folder and propose labels")
     label.add_argument("--source", required=True)
     label.add_argument("--review-dir", default="review")
     label.add_argument("--min-confidence", type=float, default=0.90)
@@ -320,7 +331,8 @@ def main() -> None:
     label.add_argument("--limit", type=int, default=0)
     label.set_defaults(func=cmd_label)
 
-    importer = sub.add_parser("import", help="pull hand-corrected rows into the dataset")
+    importer = sub.add_parser("import", parents=[common],
+                              help="pull hand-corrected rows into the dataset")
     importer.add_argument("csv_path")
     importer.set_defaults(func=cmd_import)
 

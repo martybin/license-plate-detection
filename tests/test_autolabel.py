@@ -174,3 +174,39 @@ class TestImportCorrections:
     def test_missing_csv(self, tmp_path):
         with pytest.raises(SystemExit, match="not found"):
             cmd_import(Args(csv_path=str(tmp_path / "nope.csv"), out=str(tmp_path), dry_run=False))
+
+
+class TestArgumentOrder:
+    """Shared flags must work on either side of the subcommand.
+
+    argparse puts parent-level options before the subcommand by default, so
+    `autolabel_plates label --dry-run` -- the way anyone would actually type it
+    -- was rejected as an unrecognized argument.
+    """
+
+    def _run(self, monkeypatch, capsys, argv):
+        import sys as _sys
+
+        from tools.autolabel_plates import main
+
+        monkeypatch.setattr(_sys, "argv", ["autolabel_plates"] + argv)
+        with pytest.raises(SystemExit):
+            main()
+        return capsys.readouterr()
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["label", "--source", "/nope", "--dry-run"],   # flag after subcommand
+            ["--dry-run", "label", "--source", "/nope"],   # flag before subcommand
+            ["label", "--source", "/nope", "--out", "x"],
+            ["--out", "x", "label", "--source", "/nope"],
+        ],
+    )
+    def test_flags_parse_in_either_position(self, monkeypatch, capsys, argv):
+        captured = self._run(monkeypatch, capsys, argv)
+        assert "unrecognized arguments" not in captured.err
+
+    def test_import_accepts_the_shared_flags_too(self, monkeypatch, capsys):
+        captured = self._run(monkeypatch, capsys, ["import", "/nope.csv", "--dry-run"])
+        assert "unrecognized arguments" not in captured.err
