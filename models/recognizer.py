@@ -137,6 +137,7 @@ class PlateRecognizer:
         img_width: int = 256,
         device: str = "cuda",
         half: bool = True,
+        allowed_letters: str = "",
     ) -> None:
         self.device = device if torch.cuda.is_available() and device == "cuda" else "cpu"
         self.charset = charset
@@ -145,6 +146,17 @@ class PlateRecognizer:
         self.img_height = img_height
         self.img_width = img_width
         self.use_half = half and self.device == "cuda"
+
+        # Constrained decoding. A site whose fleet is entirely one plate class
+        # knows the letter before the model runs, so letting the network pick a
+        # letter it cannot possibly be is throwing away information. Digits stay
+        # unconstrained; only the letter classes are masked.
+        self.allowed_letters = allowed_letters or ""
+        self._blocked_idx = [
+            i
+            for i, c in enumerate(charset)
+            if not c.isdigit() and self.allowed_letters and c not in self.allowed_letters
+        ]
 
         # pretrained=False on purpose: the ImageNet weights would be overwritten
         # by the checkpoint on the next line anyway, and downloading them would
@@ -185,7 +197,14 @@ class PlateRecognizer:
         return tensor.half() if self.use_half else tensor
 
     def _ctc_decode(self, logits: torch.Tensor) -> List[Recognition]:
-        probs = F.softmax(logits.float(), dim=2)
+        logits = logits.float()
+        if self._blocked_idx:
+            # Mask before the softmax so the confidence is renormalised over the
+            # letters that are actually possible at this site.
+            logits = logits.clone()
+            logits[:, :, self._blocked_idx] = float("-inf")
+
+        probs = F.softmax(logits, dim=2)
         confs, preds = probs.max(dim=2)
         preds = preds.cpu().numpy()
         confs = confs.cpu().numpy()

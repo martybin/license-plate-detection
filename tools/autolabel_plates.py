@@ -62,6 +62,7 @@ def build_recognizer(cfg: dict) -> PlateRecognizer:
         img_width=rec["img_width"],
         device=cfg.get("device", "cpu"),
         half=rec.get("half", True),
+        allowed_letters=rec.get("allowed_letters", ""),
     )
 
 

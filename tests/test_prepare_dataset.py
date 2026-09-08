@@ -1,8 +1,6 @@
 """Dataset preparation: annotation parsing and YOLO label geometry."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from training.prepare_dataset import (

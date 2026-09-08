@@ -104,6 +104,9 @@ class TestCtcDecode:
         obj.charset = CHARSET
         obj.idx_to_char = {i: c for i, c in enumerate(CHARSET)}
         obj.blank_idx = len(CHARSET)
+        # Unconstrained decoding; __init__ always sets these two.
+        obj.allowed_letters = ""
+        obj._blocked_idx = []
         return obj
 
     def _logits(self, indices, confidence=0.9):

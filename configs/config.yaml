@@ -14,7 +14,19 @@ recognizer:
   backbone: resnet18
   img_height: 64
   img_width: 192
-  charset: "0123456789ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی"
+  charset: "0123456789ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهیDS"
+  # Constrained decoding: restrict the plate LETTER to this set. Digits are never
+  # constrained.
+  #
+  # KEEP THIS EMPTY IN PRODUCTION. If a visitor or contractor drives in with a
+  # different plate class, a constraint rewrites their letter instead of reading
+  # it -- and a rewritten plate that happens to match a registered vehicle shows
+  # the wrong driver at the barrier, confidently.
+  #
+  # Its real use is offline: set it while running tools/autolabel_plates.py over
+  # photos you already know are one class, to bootstrap training data for that
+  # letter. Then retrain and deploy with it empty again.
+  allowed_letters: ""
   half: true
   pretrained: true    # ImageNet init, used by training only
 
@@ -78,3 +90,13 @@ training:
     workers: 4
     val_split: 0.05
     augment: true
+    # Even out the plate-letter distribution during sampling. 0 = natural
+    # distribution, 1 = fully balanced. Rare letters are otherwise drowned out:
+    # the model learns to guess common ones because that pays statistically.
+    # Letters named in recognizer.allowed_letters get an extra 2x boost.
+    letter_balance: 1.0
+    # Extra 2x sampling weight for letters this site actually sees. Independent
+    # of recognizer.allowed_letters: emphasise a letter during TRAINING so the
+    # model truly learns it, while still deploying with no inference-time mask.
+    # Mine gate (yellow public plates): "ع".  General/municipal: leave empty.
+    boost_letters: "ع"

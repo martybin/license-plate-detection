@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import yaml
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from models.recognizer import IMAGENET_MEAN, IMAGENET_STD, ResNetCRNN, letterbox_plate
 from utils.image_processing import imread_unicode
@@ -232,6 +232,34 @@ def split_by_plate(
     return train, val
 
 
+def letter_balanced_weights(
+    samples: Sequence[Tuple[Path, str]], strength: float = 1.0, boost: str = ""
+) -> List[float]:
+    """Per-sample weights that even out the plate-letter distribution.
+
+    Letters are wildly unbalanced in IR-LPR -- 'د' has ~2550 plates while 'ع' has
+    ~600 -- and a CTC model handles that by learning to guess the common letters,
+    because statistically that pays. Sampling inversely to letter frequency makes
+    each letter appear about equally often per epoch.
+
+    `strength` interpolates: 0.0 leaves the natural distribution alone, 1.0 fully
+    balances. `boost` doubles the weight of specific letters again, for a site
+    that only ever sees one plate class.
+    """
+    counts: Dict[str, int] = defaultdict(int)
+    for _, label in samples:
+        counts[plate_letter(label)] += 1
+
+    weights: List[float] = []
+    for _, label in samples:
+        letter = plate_letter(label)
+        w = (1.0 / counts[letter]) ** strength if counts[letter] else 1.0
+        if boost and letter and letter in boost:
+            w *= 2.0
+        weights.append(w)
+    return weights
+
+
 def scan_samples(root: Path, charset: str, min_len: int = 5, max_len: int = 10) -> List[Tuple[Path, str]]:
     samples: List[Tuple[Path, str]] = []
     skipped = 0
@@ -279,10 +307,25 @@ def greedy_decode(logits: torch.Tensor, charset: str) -> List[str]:
 
 
 @torch.no_grad()
-def evaluate(model, loader, charset: str, device) -> Tuple[float, float]:
-    """Return (character error rate, exact-match accuracy)."""
+def plate_letter(text: str) -> str:
+    """The single non-digit character an Iranian plate carries, if present."""
+    for ch in text:
+        if not ch.isdigit():
+            return ch
+    return ""
+
+
+def evaluate(model, loader, charset: str, device) -> Tuple[float, float, Dict[str, Tuple[int, int]]]:
+    """Return (character error rate, exact-match accuracy, per-letter tally).
+
+    The per-letter tally is (correct, total) keyed by the plate's true letter.
+    Overall CER hides the failure that actually matters at a single site: a
+    letter with 2% of the training mass can be read wrong every single time
+    while the headline number still looks respectable.
+    """
     model.eval()
     total_chars = total_dist = correct = seen = 0
+    per_letter: Dict[str, List[int]] = defaultdict(lambda: [0, 0])
     for images, targets, lengths in loader:
         logits = model(images.to(device))
         offset = 0
@@ -293,10 +336,27 @@ def evaluate(model, loader, charset: str, device) -> Tuple[float, float]:
         for pred, truth in zip(greedy_decode(logits, charset), truths):
             total_dist += edit_distance(pred, truth)
             total_chars += len(truth)
-            correct += int(pred == truth)
+            hit = int(pred == truth)
+            correct += hit
             seen += 1
+            letter = plate_letter(truth)
+            if letter:
+                per_letter[letter][0] += int(plate_letter(pred) == letter)
+                per_letter[letter][1] += 1
     model.train()
-    return (total_dist / max(total_chars, 1)), (correct / max(seen, 1))
+    tally = {k: (v[0], v[1]) for k, v in per_letter.items()}
+    return (total_dist / max(total_chars, 1)), (correct / max(seen, 1)), tally
+
+
+def format_letter_report(tally: Dict[str, Tuple[int, int]], focus: str = "") -> str:
+    """One line per letter: how often the letter itself was read correctly."""
+    if not tally:
+        return "  (no letters in validation set)"
+    lines = []
+    for letter, (hit, total) in sorted(tally.items(), key=lambda kv: -kv[1][1]):
+        mark = "  <-- site letter" if focus and letter in focus else ""
+        lines.append(f"    {letter}  {hit:4d}/{total:<4d}  {hit / max(total, 1):6.1%}{mark}")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -308,7 +368,15 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
         cfg = yaml.safe_load(f)
 
     rec_cfg = cfg["recognizer"]
+    # Two different things that were wrongly the same setting:
+    #   recognizer.allowed_letters  - an INFERENCE mask, unsafe in production
+    #   training.recognizer.boost_letters - which letters to over-sample while
+    #     training, so the model genuinely learns them
+    # A site can emphasise its letter during training and still deploy unmasked.
     train_cfg = cfg.get("training", {}).get("recognizer", {})
+    focus_letters = (
+        train_cfg.get("boost_letters") or rec_cfg.get("allowed_letters", "") or ""
+    )
     charset = rec_cfg["charset"]
     device = torch.device("cuda" if torch.cuda.is_available() and cfg.get("device") == "cuda" else "cpu")
 
@@ -332,12 +400,34 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
     loader_kwargs = dict(collate_fn=collate_fn, num_workers=workers, pin_memory=(device.type == "cuda"))
     if workers > 0:
         loader_kwargs["persistent_workers"] = True
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True, **loader_kwargs)
+    balance = float(train_cfg.get("letter_balance", 0.0))
+    if balance > 0:
+        weights = letter_balanced_weights(train_samples, balance, focus_letters)
+        sampler = WeightedRandomSampler(weights, num_samples=len(train_samples), replacement=True)
+        train_loader = DataLoader(
+            train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, **loader_kwargs
+        )
+        print(f"letter-balanced sampling on (strength {balance}"
+              + (f", boosting {focus_letters}" if focus_letters else "") + ")")
+    else:
+        train_loader = DataLoader(
+            train_ds, batch_size=batch_size, shuffle=True, drop_last=True, **loader_kwargs
+        )
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
+
+    # A fixed, un-augmented slice of the training set, the same size as val.
+    # train CER vs val CER is what separates "needs a bigger model" from "needs
+    # more data": close together and both high means underfitting, far apart
+    # means overfitting, and only the first is fixed by more capacity.
+    probe = random.Random(4242).sample(train_samples, min(len(val_samples), len(train_samples)))
+    train_probe_ds = PlateOCRDataset(probe, augment=False, **common)
+    train_probe_loader = DataLoader(
+        train_probe_ds, batch_size=batch_size, shuffle=False, **loader_kwargs
+    )
 
     model = ResNetCRNN(
         num_classes=len(charset) + 1,
-        backbone=rec_cfg.get("backbone", "resnet34"),
+        backbone=rec_cfg.get("backbone", "resnet18"),
         pretrained=rec_cfg.get("pretrained", True),
     ).to(device)
 
@@ -362,6 +452,7 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
 
     target_path = Path(rec_cfg["model_path"])
     target_path.parent.mkdir(parents=True, exist_ok=True)
+    last_tally: Dict[str, Tuple[int, int]] = {}
     best_cer = float("inf")
     checked_timesteps = False
 
@@ -404,7 +495,8 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
             total_loss += loss.item()
 
         avg_loss = total_loss / max(len(train_loader), 1)
-        cer, acc = evaluate(model, val_loader, charset, device)
+        cer, acc, tally = evaluate(model, val_loader, charset, device)
+        train_cer, _, _ = evaluate(model, train_probe_loader, charset, device)
         flag = ""
         if cer < best_cer:
             # Checkpoint on validation, not at the final epoch: the last epoch is
@@ -412,10 +504,32 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
             best_cer = cer
             torch.save(model.state_dict(), target_path)
             flag = "  <- saved"
-        print(f"Epoch {epoch:03d} | loss {avg_loss:.4f} | val CER {cer:.4f} | plate acc {acc:.4f}{flag}")
+
+        site_note = ""
+        if focus_letters:
+            hit = sum(t[0] for l, t in tally.items() if l in focus_letters)
+            tot = sum(t[1] for l, t in tally.items() if l in focus_letters)
+            if tot:
+                site_note = f" | {focus_letters} acc {hit / tot:.3f}"
+        print(
+            f"Epoch {epoch:03d} | loss {avg_loss:.4f} | train CER {train_cer:.4f} | val CER {cer:.4f} "
+            f"| plate acc {acc:.4f}{site_note}{flag}"
+        )
+        last_tally = tally
 
     print(f"\nBest val CER: {best_cer:.4f}")
-    print(f"Recognizer weights saved to {target_path}")
+    gap = cer - train_cer
+    verdict = (
+        "underfitting - more capacity or more epochs would help"
+        if train_cer > 0.05 and gap < 0.05
+        else "overfitting - more data or stronger augmentation, not a bigger model"
+        if gap > 0.10
+        else "balanced"
+    )
+    print(f"Final train CER {train_cer:.4f} vs val CER {cer:.4f}  (gap {gap:+.4f}) -> {verdict}")
+    print("\nPer-letter accuracy on the final epoch:")
+    print(format_letter_report(last_tally, focus_letters))
+    print(f"\nRecognizer weights saved to {target_path}")
 
 
 if __name__ == "__main__":

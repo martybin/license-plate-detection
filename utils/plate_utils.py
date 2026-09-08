@@ -6,7 +6,9 @@ from typing import List, NamedTuple, Optional
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩"
 ENGLISH_DIGITS = "0123456789"
-PLATE_LETTERS = "ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی"
+# D and S are Latin by design on Iranian diplomatic and political plates, and
+# they use the same 2-digit + letter + 3-digit + region layout as the rest.
+PLATE_LETTERS = "ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهیDS"
 
 # Arabic code points that render identically to their Persian counterparts and
 # routinely leak in from XML annotations and keyboard input.
@@ -22,7 +24,6 @@ WORD_TO_LETTER = {
     "معلولینوجانبازان": "ژ",
     "معلولین": "ژ",
     "جانبازان": "ژ",
-    "تشریفات": "ت",
     # 'الف' is the *name* of the letter ا; without this it survives as three
     # separate plate letters and every such label is silently malformed.
     "الف": "ا",

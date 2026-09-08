@@ -32,10 +32,12 @@ class FrameGrabber:
     truck that left minutes ago. Dropping stale frames keeps the display live.
     """
 
-    def __init__(self, source, width: int, height: int, reconnect_delay: float = 2.0) -> None:
+    def __init__(self, source, width: int, height: int, fps: int = 0,
+                 reconnect_delay: float = 2.0) -> None:
         self.source = source
         self.width = width
         self.height = height
+        self.fps = int(fps or 0)
         self.reconnect_delay = reconnect_delay
         self._frame: Optional[np.ndarray] = None
         # Monotonic counter so the consumer can tell a fresh frame from the one
@@ -53,6 +55,10 @@ class FrameGrabber:
             return None
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        if self.fps > 0:
+            # Asking the camera for the configured rate stops the grab thread
+            # spinning faster than the sensor actually delivers.
+            cap.set(cv2.CAP_PROP_FPS, self.fps)
         # Keep the driver-side buffer minimal so we stay close to real time.
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
@@ -135,11 +141,12 @@ class RealtimeLPR:
         self.recognizer = PlateRecognizer(
             model_path=rec_cfg["model_path"],
             charset=rec_cfg["charset"],
-            backbone=rec_cfg.get("backbone", "resnet34"),
+            backbone=rec_cfg.get("backbone", "resnet18"),
             img_height=rec_cfg["img_height"],
             img_width=rec_cfg["img_width"],
             device=device,
             half=rec_cfg.get("half", True),
+            allowed_letters=rec_cfg.get("allowed_letters", ""),
         )
 
         self.db = VehicleDB(db_cfg["path"])
@@ -182,7 +189,9 @@ class RealtimeLPR:
             saver=self.saver,
         )
 
-        self.grabber = FrameGrabber(cam_cfg["source"], cam_cfg["width"], cam_cfg["height"])
+        self.grabber = FrameGrabber(
+            cam_cfg["source"], cam_cfg["width"], cam_cfg["height"], cam_cfg.get("fps", 0)
+        )
         self.window_name = disp_cfg["window_name"]
         self.fullscreen = disp_cfg.get("fullscreen", True)
         self.base_size = int(disp_cfg.get("font_scale", 1.1) * 26)

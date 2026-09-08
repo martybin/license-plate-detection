@@ -5,7 +5,10 @@
 torch>=2.0
 torchvision>=0.15
 
-ultralytics>=8.1.0      # YOLOv8 plate detector
+# YOLOv8 plate detector. Train and deploy on Linux/WSL: ultralytics 8.4.138
+# unconditionally opens /etc/os-release at import time, which raises OSError on
+# native Windows. Not our code -- but it breaks `import main` there.
+ultralytics>=8.1.0
 opencv-python>=4.8.0    # use opencv-python-headless on a server with no display
 numpy>=1.24
 PyYAML>=6.0

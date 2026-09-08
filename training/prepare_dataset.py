@@ -160,13 +160,86 @@ def _is_plate_object(name: str) -> bool:
     return "".join(ch for ch in name.lower() if ch.isalnum()) in PLATE_OBJECT_NAMES
 
 
+def _crop_to_boxes(src: Path, dest: Path, boxes: List[CharBox], margin: int = 22) -> bool:
+    """Write `src` cropped to the extent of `boxes`. False if it could not be done.
+
+    cv2 is imported lazily so this module keeps working (and stays testable)
+    without OpenCV installed, which matters because everything else here is
+    stdlib only.
+    """
+    try:
+        from utils.image_processing import imread_unicode
+        import cv2
+    except ImportError:
+        return False
+
+    image = imread_unicode(src)
+    if image is None:
+        return False
+
+    height, width = image.shape[:2]
+    x1 = max(0, int(min(b.xmin for b in boxes)) - margin)
+    y1 = max(0, int(min(b.ymin for b in boxes)) - margin)
+    x2 = min(width, int(max(b.xmax for b in boxes)) + margin)
+    y2 = min(height, int(max(b.ymax for b in boxes)) + margin)
+    if x2 - x1 < 10 or y2 - y1 < 10:
+        return False
+
+    ok, buf = cv2.imencode(dest.suffix or ".jpg", image[y1:y2, x1:x2])
+    if not ok:
+        return False
+    dest.write_bytes(buf.tobytes())
+    return True
+
+
+def _overlaps(boxes: List[CharBox], tolerance: float = 2.0) -> bool:
+    """True if any two neighbouring boxes sit on top of each other."""
+    ordered = sorted(boxes, key=lambda b: b.xmin)
+    return any(
+        ordered[i + 1].xmin < ordered[i].xmax - tolerance for i in range(len(ordered) - 1)
+    )
+
+
+def split_body_and_panel(boxes: List[CharBox]) -> Tuple[List[CharBox], List[CharBox]]:
+    """Split annotation objects at the widest horizontal gap.
+
+    An Iranian plate is a run of characters, a gap, then the two-digit region
+    panel. The widest gap is that divider.
+    """
+    ordered = sorted(boxes, key=lambda b: b.xmin)
+    if len(ordered) < 3:
+        return ordered, []
+    gaps = [(ordered[i + 1].xmin - ordered[i].xmax, i) for i in range(len(ordered) - 1)]
+    _, index = max(gaps)
+    return ordered[: index + 1], ordered[index + 1 :]
+
+
+def usable_region(boxes: List[CharBox]) -> Tuple[List[CharBox], bool]:
+    """Return the annotation objects that can be trusted, and whether we cropped.
+
+    The IR-LPR dummy set contains a group whose region-code panel is rendered
+    several times on top of itself -- the image and the annotation are both
+    corrupted there, so no label for those two digits is correct. The plate body
+    is clean, so we keep the body and crop the image to match rather than throw
+    1000 samples of a letter away or invent digits for them.
+    """
+    if not _overlaps(boxes):
+        return sorted(boxes, key=lambda b: b.xmin), False
+
+    body, panel = split_body_and_panel(boxes)
+    if body and panel and not _overlaps(body) and _overlaps(panel):
+        return body, True
+    return sorted(boxes, key=lambda b: b.xmin), False
+
+
 def extract_plate_from_xml(xml_path: Path) -> Optional[str]:
     """Read the plate text by ordering the character objects left to right."""
     boxes, _ = parse_xml(xml_path)
     chars = [b for b in boxes if not _is_plate_object(b.name)]
     if not chars:
         return None
-    plate = clean_plate_text("".join(b.name for b in sorted(chars, key=lambda b: b.xmin)))
+    trusted, _cropped = usable_region(chars)
+    plate = clean_plate_text("".join(b.name for b in trusted))
     return plate if len(plate) >= 5 else None
 
 
@@ -322,7 +395,7 @@ def prepare_detection_dataset(
 def rename_images_using_xml(src_folder: Path, output_folder: Path) -> Tuple[int, int]:
     output_folder.mkdir(parents=True, exist_ok=True)
     name_counter: Dict[str, int] = defaultdict(int)
-    success = failed = 0
+    success = failed = cropped_count = 0
 
     for img_path in sorted(src_folder.glob("*.*")):
         if img_path.suffix.lower() not in IMG_EXTS:
@@ -341,9 +414,19 @@ def rename_images_using_xml(src_folder: Path, output_folder: Path) -> Tuple[int,
         suffix = img_path.suffix.lower()
         # train_recognizer strips this `_N` back off, so duplicates stay usable.
         new_name = f"{plate}{suffix}" if index == 1 else f"{plate}_{index}{suffix}"
-        shutil.copy2(img_path, output_folder / new_name)
+        dest = output_folder / new_name
+
+        boxes, _ = parse_xml(xml_path)
+        chars = [b for b in boxes if not _is_plate_object(b.name)]
+        trusted, cropped = usable_region(chars)
+        if cropped and _crop_to_boxes(img_path, dest, trusted):
+            cropped_count += 1
+        else:
+            shutil.copy2(img_path, dest)
         success += 1
 
+    if cropped_count:
+        print(f"  cropped {cropped_count} image(s) whose region panel was corrupted")
     return success, failed
 
 

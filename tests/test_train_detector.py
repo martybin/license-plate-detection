@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from training.train_detector import _count_images, _locate_best
 
 
