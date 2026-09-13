@@ -31,7 +31,7 @@ recognizer:
   pretrained: true    # ImageNet init, used by training only
 
 camera:
-  source: 0           # index, video file, or rtsp:// URL
+  source: 0
   width: 1280
   height: 720
   fps: 30
