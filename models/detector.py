@@ -44,7 +44,8 @@ class PlateDetector:
         # is actually wanted.
         self._predict_extra = {}
         if self.use_half:
-            self._predict_extra[self._half_kwarg()] = True
+            key = self._half_kwarg()
+            self._predict_extra[key] = 16 if key == "quantize" else True
 
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
