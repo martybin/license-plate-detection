@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(///wsl.localhost/ubuntu-22.04//**)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -)",
+      "Bash(python3 -m tools.diagnose_failures _difftest)"
+    ]
+  }
+}

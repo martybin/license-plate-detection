@@ -7,3 +7,6 @@ captures/
 __pycache__/
 *.pyc
 .venv/
+
+#models
+yolov8s.pt

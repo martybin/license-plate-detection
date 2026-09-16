@@ -107,7 +107,10 @@ class TextRenderer:
         if self.font_path is None:
             return None
         if size not in self._fonts:
-            self._fonts[size] = ImageFont.truetype(self.font_path, size)
+            # Bidi was already applied by shape_persian; RAQM would apply it twice.
+            self._fonts[size] = ImageFont.truetype(
+                self.font_path, size, layout_engine=ImageFont.Layout.BASIC
+            )
         return self._fonts[size]
 
     def render(self, frame: np.ndarray, items: Iterable[TextItem]) -> np.ndarray:
@@ -164,3 +167,18 @@ def draw_panel(
     overlay = np.full_like(region, color, dtype=np.uint8)
     frame[y1:y2, x1:x2] = cv2.addWeighted(overlay, alpha, region, 1 - alpha, 0)
     return frame
+
+def configure_qt_fonts(font_path: Optional[str] = None) -> None:
+    """Use an installed font directory when the OpenCV Qt bundle has none."""
+    import os
+    configured = os.environ.get("QT_QPA_FONTDIR")
+    if configured and Path(configured).is_dir():
+        return
+    candidates = ([str(Path(font_path).parent)] if font_path else []) + [
+        "/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/truetype/freefont",
+        "C:/Windows/Fonts",
+    ]
+    for candidate in candidates:
+        if Path(candidate).is_dir():
+            os.environ["QT_QPA_FONTDIR"] = candidate
+            return

@@ -32,6 +32,7 @@ class VehicleDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_db()
+        self._init_capture_table()
 
     def _init_db(self) -> None:
         with self._lock, self._conn:
@@ -49,6 +50,37 @@ class VehicleDB:
                 )
                 """
             )
+
+    def _init_capture_table(self) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS captures (
+                    id INTEGER PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    plate TEXT NOT NULL,
+                    full_frame TEXT NOT NULL,
+                    plate_raw TEXT NOT NULL,
+                    plate_enhanced TEXT NOT NULL DEFAULT '',
+                    det_conf REAL NOT NULL,
+                    ocr_conf REAL NOT NULL
+                )"""
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS captures_plate_time ON captures(plate, timestamp)"
+            )
+
+    def record_capture(self, timestamp: str, plate: str, full_frame: str,
+                       plate_raw: str, plate_enhanced: str = "",
+                       det_conf: float = 0.0, ocr_conf: float = 0.0) -> int:
+        """Record an observation independently of the vehicle registry."""
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """INSERT INTO captures
+                (timestamp, plate, full_frame, plate_raw, plate_enhanced, det_conf, ocr_conf)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (timestamp, plate, full_frame, plate_raw, plate_enhanced, det_conf, ocr_conf),
+            )
+            return cursor.lastrowid
 
     def lookup(self, plate: str) -> Optional[dict]:
         if not plate:

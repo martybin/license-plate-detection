@@ -261,3 +261,16 @@ class TestSaverIntegration:
         pipe = build(ScriptedRecognizer([Recognition(PLATE, 0.9)] * 3), db, saver=None,
                      min_votes=1, min_score=0.5)
         assert pipe.process(FRAME).confirmed is True
+
+
+def test_previous_confirmation_never_labels_next_vehicle_photo(db):
+    saver = SpySaver()
+    recognizer = ScriptedRecognizer([Recognition(PLATE, .9)] * 3)
+    pipe = build(recognizer, db, saver=saver, min_votes=2)
+    pipe.process(FRAME)
+    pipe.process(FRAME)
+    saver.calls.clear()
+    recognizer.readings = [Recognition(OTHER, .95)] * 3
+    result = pipe.process(FRAME)
+    assert result.plate == OTHER and not result.confirmed
+    assert saver.calls == []

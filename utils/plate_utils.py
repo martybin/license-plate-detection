@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+from pathlib import Path
 from typing import List, NamedTuple, Optional
 
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
@@ -68,6 +70,7 @@ def normalize_iran_plate(text: str) -> str:
     """Fold digits/letters to canonical Persian forms and drop everything else."""
     if not text:
         return ""
+    text = unicodedata.normalize('NFKC', text)
     text = text.translate(_DIGIT_TABLE).translate(_LETTER_TABLE)
     # Strip separators *before* matching the word forms: the annotations spell
     # the class as 'ژ (معلولین و جانبازان)' with spaces, parentheses and
@@ -116,8 +119,17 @@ def repair_plate(text: str) -> str:
     return candidate if is_valid_iran_plate(candidate) else plate
 
 
-def format_plate_display(plate: str) -> str:
+def format_plate_display(plate: str, bidi: bool = False) -> str:
     parts = parse_iran_plate(plate)
     if parts is None:
         return plate
-    return f"{parts.prefix} {parts.letter} {parts.serial} | {parts.region}"
+    label = f"{parts.prefix} {parts.letter} {parts.serial} | {parts.region}"
+    return "\u202d" + label + "\u202c" if bidi else label
+
+def label_from_filename(path: Path) -> str:
+    """Strip only the numeric duplicate suffix produced by dataset preparation."""
+    stem = path.stem
+    head, sep, tail = stem.rpartition("_")
+    if sep and head and tail.isdigit():
+        stem = head
+    return normalize_iran_plate(stem)

@@ -29,8 +29,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from models.pipeline import LPRPipeline, PlateVoter  # noqa: E402
 from utils.image_processing import enhance_plate, estimate_quality  # noqa: E402
-from utils.overlay import TextItem, TextRenderer, draw_panel  # noqa: E402
+from utils.overlay import TextItem, TextRenderer, draw_panel, configure_qt_fonts  # noqa: E402
 from utils.plate_utils import format_plate_display, is_valid_iran_plate, repair_plate  # noqa: E402
+from utils.camera import FrameGrabber
 
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
@@ -95,6 +96,7 @@ class LiveTester:
             img_width=rec_cfg["img_width"],
             device=device,
             half=rec_cfg.get("half", True),
+            allowed_letters=rec_cfg.get("allowed_letters", ""),
         )
 
         self.enhance_params = {
@@ -105,6 +107,7 @@ class LiveTester:
             "auto": pre_cfg.get("auto_enhance", True),
         }
 
+        self.saver = None
         self.pipeline: Optional[LPRPipeline] = None
         if not args.ocr_only:
             from models.detector import PlateDetector
@@ -114,15 +117,21 @@ class LiveTester:
             print("Loading detector ...")
             detector = PlateDetector(
                 model_path=det_cfg["model_path"],
-                conf_threshold=args.conf or det_cfg["conf_threshold"],
+                conf_threshold=args.conf if args.conf is not None else det_cfg["conf_threshold"],
                 iou_threshold=det_cfg["iou_threshold"],
                 img_size=det_cfg["img_size"],
                 device=device,
                 pad_ratio=det_cfg.get("pad_ratio", 0.06),
+                max_det=det_cfg.get("max_det", 8),
                 half=det_cfg.get("half", True),
             )
             self.db = VehicleDB(self.cfg["database"]["path"])
+            from utils.plate_saver import PlateSaver
+            cap_cfg = dict(self.cfg.get("capture", {}))
+            if cap_cfg.pop("enabled", True):
+                self.saver = PlateSaver(db=self.db, **cap_cfg)
             self.pipeline = LPRPipeline(
+                saver=self.saver,
                 detector=detector,
                 recognizer=self.recognizer,
                 db=self.db,
@@ -139,6 +148,7 @@ class LiveTester:
             self.voter = PlateVoter(min_votes=args.min_votes, min_score=1.0)
 
         self.renderer = TextRenderer(self.cfg.get("display", {}).get("font_path"))
+        configure_qt_fonts(self.renderer.font_path)
         self.snapshot_dir = Path(args.snapshot_dir)
         self.fps = 0.0
 
@@ -185,7 +195,7 @@ class LiveTester:
 
         if reading is not None and reading.text:
             valid = is_valid_iran_plate(reading.text)
-            label = format_plate_display(reading.text) if valid else reading.text
+            label = format_plate_display(reading.text, bidi=True) if valid else reading.text
             state = "تایید شد" if confirmed else ("معتبر" if valid else "نامعتبر")
             items.append(
                 (f"پلاک: {label}", (24, y), size, GREEN if confirmed else (YELLOW if valid else RED))
@@ -235,6 +245,14 @@ class LiveTester:
 
     # -------------------------------------------------------------------- run
 
+    def close(self):
+        if self.saver is not None:
+            self.saver.close()
+            self.saver = None
+        if self.db is not None:
+            self.db.close()
+            self.db = None
+
     def run_image(self, path: Path) -> None:
         frame = cv2.imread(str(path))
         if frame is None:
@@ -278,18 +296,17 @@ class LiveTester:
 
     def run_camera(self) -> None:
         source = int(self.args.source) if str(self.args.source).isdigit() else self.args.source
-        cap = cv2.VideoCapture(source)
-        if not cap.isOpened():
-            raise SystemExit(
-                f"Cannot open camera source: {source}\n"
-                "On Windows try --source 0 or 1; on WSL the laptop camera is usually "
-                "not passed through, so run this from Windows or use --image."
-            )
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg["camera"]["width"])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg["camera"]["height"])
+        cam = self.cfg["camera"]
+        is_file = isinstance(source, str) and Path(source).is_file()
+        cap = cv2.VideoCapture(source) if is_file else None
+        grabber = None if is_file else FrameGrabber(
+            source, cam["width"], cam["height"], cam.get("fps", 0)
+        ).start()
+        last_seq = -1
+        reading = bbox = info = quality = None
+        confirmed = False
 
         window = "LPR live test"
-        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
         print("\nHold a plate in front of the camera.  q quit | s save | space pause | r reset\n")
 
         paused = False
@@ -298,21 +315,34 @@ class LiveTester:
         last_print = ""
 
         try:
+            cv2.namedWindow(window, cv2.WINDOW_NORMAL)
             while True:
+                fresh = False
                 if not paused:
-                    ok, grabbed = cap.read()
-                    if not ok:
-                        print("camera read failed")
+                    if cap is not None:
+                        ok, grabbed = cap.read()
+                        if not ok:
+                            break
+                        fresh = True
+                    else:
+                        grabbed, seq = grabber.read()
+                        fresh = grabbed is not None and seq != last_seq
+                        if fresh:
+                            last_seq = seq
+                    if fresh:
+                        frame = grabbed
+                        reading, bbox, info, confirmed, quality = self._process(frame)
+                if frame is None:
+                    if cv2.waitKey(20) & 0xFF in (ord("q"), 27):
                         break
-                    frame = grabbed
-
-                reading, bbox, info, confirmed, quality = self._process(frame)
+                    continue
 
                 now = time.monotonic()
-                dt = now - last_tick
-                last_tick = now
-                if dt > 0:
-                    self.fps = 0.9 * self.fps + 0.1 / dt if self.fps else 1.0 / dt
+                if fresh:
+                    dt = now - last_tick
+                    last_tick = now
+                    if dt > 0:
+                        self.fps = 0.9 * self.fps + 0.1 / dt if self.fps else 1.0 / dt
 
                 if reading is not None and reading.text and reading.text != last_print:
                     self._report(reading, confirmed, quality)
@@ -321,7 +351,7 @@ class LiveTester:
 
                 cv2.imshow(window, self._draw(frame, reading, bbox, confirmed, info, quality))
 
-                key = cv2.waitKey(1) & 0xFF
+                key = cv2.waitKey(1 if fresh else 20) & 0xFF
                 if key in (ord("q"), 27):
                     break
                 if key == ord("s"):
@@ -331,20 +361,24 @@ class LiveTester:
                 if key == ord("r"):
                     (self.pipeline.voter if self.pipeline else self.voter).reset()
                     last_print = ""
+                    confirmed = False
+                    info = None
                     print("votes reset")
         except KeyboardInterrupt:
             pass
         finally:
-            cap.release()
-            if self.db is not None:
-                self.db.close()
+            if cap is not None:
+                cap.release()
+            if grabber is not None:
+                grabber.stop()
+            self.close()
             cv2.destroyAllWindows()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default="configs/config.yaml")
-    parser.add_argument("--source", default="0", help="camera index or video path")
+    parser.add_argument("--source", default="rtsp://admin:admin@172.16.18.17:554/snl/live/1/1", help="camera index or video path")
     parser.add_argument("--image", default=None, help="run once on a still image instead")
     parser.add_argument(
         "--ocr-only",
@@ -357,10 +391,13 @@ def main() -> None:
     args = parser.parse_args()
 
     tester = LiveTester(args)
-    if args.image:
-        tester.run_image(Path(args.image))
-    else:
-        tester.run_camera()
+    try:
+        if args.image:
+            tester.run_image(Path(args.image))
+        else:
+            tester.run_camera()
+    finally:
+        tester.close()
 
 
 if __name__ == "__main__":

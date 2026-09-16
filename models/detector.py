@@ -42,10 +42,11 @@ class PlateDetector:
         # predict call for the old name -- 30 lines a second into journalctl on a
         # live gate. Resolve the supported name once and only pass it when fp16
         # is actually wanted.
-        self._predict_extra = {}
-        if self.use_half:
-            key = self._half_kwarg()
-            self._predict_extra[key] = 16 if key == "quantize" else True
+        key = self._half_kwarg()
+        # Set CPU precision too: checkpoint overrides may contain a legacy bool.
+        self._predict_extra = {
+            key: (16 if self.use_half else 32) if key == "quantize" else self.use_half
+        }
 
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
