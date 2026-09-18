@@ -159,7 +159,7 @@ class LPRPipeline:
             self.voter.add(reading.text, reading.confidence)
 
         confirmed = self.voter.confirmed()
-        if confirmed is None:
+        if confirmed is None or confirmed != reading.text:
             return PlateResult(
                 reading.text,
                 None,

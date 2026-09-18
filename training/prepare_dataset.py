@@ -359,11 +359,17 @@ def prepare_detection_dataset(
     n_train = process(train_src, dirs["img_train"], dirs["lbl_train"])
     n_val = process(val_src, dirs["img_val"], dirs["lbl_val"])
     if test_src is not None:
-        n_val += process(test_src, dirs["img_val"], dirs["lbl_val"])
+        test_images = output_root / "images" / "test"
+        test_labels = output_root / "labels" / "test"
+        test_images.mkdir(parents=True, exist_ok=True)
+        test_labels.mkdir(parents=True, exist_ok=True)
+        process(test_src, test_images, test_labels)
 
     (output_root / "data.yaml").write_text(
         f"path: {output_root.resolve().as_posix()}\n"
-        f"train: images/train\nval: images/val\nnames:\n  0: plate\n",
+        f"train: images/train\nval: images/val\n"
+        + ("test: images/test\n" if test_src is not None else "")
+        + "names:\n  0: plate\n",
         encoding="utf-8",
     )
 
@@ -415,11 +421,18 @@ def rename_images_using_xml(src_folder: Path, output_folder: Path) -> Tuple[int,
         # train_recognizer strips this `_N` back off, so duplicates stay usable.
         new_name = f"{plate}{suffix}" if index == 1 else f"{plate}_{index}{suffix}"
         dest = output_folder / new_name
+        while dest.exists():
+            index += 1
+            dest = output_folder / f"{plate}_{index}{suffix}"
+        name_counter[plate] = index
 
         boxes, _ = parse_xml(xml_path)
         chars = [b for b in boxes if not _is_plate_object(b.name)]
         trusted, cropped = usable_region(chars)
-        if cropped and _crop_to_boxes(img_path, dest, trusted):
+        if cropped:
+            if not _crop_to_boxes(img_path, dest, trusted):
+                failed += 1
+                continue
             cropped_count += 1
         else:
             shutil.copy2(img_path, dest)
@@ -445,7 +458,8 @@ def prepare_ocr_dataset(
         if src is None:
             continue
         print(f"Processing {name} ...")
-        ok, failed = rename_images_using_xml(src, output_root)
+        split_name = {'TRAIN': 'train', 'VALIDATION': 'val', 'TEST': 'test'}[name]
+        ok, failed = rename_images_using_xml(src, output_root / split_name)
         total_success += ok
         total_failed += failed
         print(f"  OK: {ok} | Failed: {failed}")

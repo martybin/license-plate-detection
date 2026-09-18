@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import queue
 import threading
 import time
@@ -65,6 +66,7 @@ class PlateSaver:
         max_age_days: float = 0.0,
         queue_size: int = 32,
         retention_every: int = RETENTION_EVERY,
+        db=None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +86,9 @@ class PlateSaver:
         self.csv_path = self.output_dir / "captures.csv"
         self.dropped = 0
         self.written = 0
+        self.failed = 0
+        self.db = db
+        self._closed = False
 
         self._last_seen: Dict[str, float] = {}
         self._queue: "queue.Queue[Optional[_Job]]" = queue.Queue(maxsize=queue_size)
@@ -104,6 +109,9 @@ class PlateSaver:
         det_conf: float = 0.0,
     ) -> bool:
         """Queue one capture. Returns True if it was accepted for writing."""
+        if self._closed:
+            self.dropped += 1
+            return False
         if not plate:
             return False
 
@@ -112,7 +120,7 @@ class PlateSaver:
             return False
 
         job = _Job(
-            stamp=datetime.now(),
+            stamp=datetime.now().astimezone(),
             plate=plate,
             det_conf=det_conf,
             ocr_conf=ocr_conf,
@@ -132,16 +140,17 @@ class PlateSaver:
             # Never block the gate on a slow disk; losing an audit image is far
             # better than stalling recognition.
             self.dropped += 1
+            self._last_seen.pop(plate, None)  # retry the next sighting
             return False
         return True
 
     def close(self) -> None:
-        self._stop.set()
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
-        self._thread.join(timeout=5.0)
+        if self._closed:
+            return
+        self._closed = True
+        # Shutdown may block: never leave jobs using a database that is closed.
+        self._queue.put(None)
+        self._thread.join()
 
     def __enter__(self) -> "PlateSaver":
         return self
@@ -174,12 +183,14 @@ class PlateSaver:
         while True:
             job = self._queue.get()
             if job is None:
+                self._queue.task_done()
                 break
             try:
                 self._write(job)
             except Exception:
-                # A capture failure must never take the gate down with it.
-                pass
+                self.failed += 1
+                self._last_seen.pop(job.plate, None)
+                logging.getLogger(__name__).exception('Capture could not be persisted')
             finally:
                 self._queue.task_done()
 
@@ -211,7 +222,7 @@ class PlateSaver:
         day_dir.mkdir(parents=True, exist_ok=True)
 
         safe_plate = "".join(c if (c.isalnum() or c in "-_") else "_" for c in job.plate)
-        stem = f"{job.stamp.strftime('%H%M%S_%f')[:-3]}_{safe_plate}"
+        stem = f"{job.stamp.strftime('%H%M%S_%f')}_{safe_plate}"
 
         written: Dict[str, str] = {}
         for key, image in (
@@ -223,10 +234,21 @@ class PlateSaver:
                 continue
             suffix = {"full_frame": "full", "plate_raw": "raw", "plate_enhanced": "enh"}[key]
             path = day_dir / f"{stem}_{suffix}.jpg"
-            if imwrite_unicode(path, image, self.jpeg_params):
+            if not imwrite_unicode(path, image, self.jpeg_params):
+                raise OSError(f'Cannot write capture: {path}')
+            else:
                 # as_posix so the log reads the same on Windows and Linux.
                 written[key] = path.relative_to(self.output_dir).as_posix()
 
+        if self.db is not None:
+            self.db.record_capture(
+                timestamp=job.stamp.isoformat(timespec="microseconds"),
+                plate=job.plate,
+                full_frame=str((self.output_dir / written["full_frame"]).resolve()) if "full_frame" in written else "",
+                plate_raw=str((self.output_dir / written["plate_raw"]).resolve()) if "plate_raw" in written else "",
+                plate_enhanced=str((self.output_dir / written["plate_enhanced"]).resolve()) if "plate_enhanced" in written else "",
+                det_conf=job.det_conf, ocr_conf=job.ocr_conf,
+            )
         self._append_csv(job, written)
         self.written += 1
         # Retention walks the whole capture tree, so running it on every write

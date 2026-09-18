@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import warnings
 from collections import defaultdict
@@ -17,7 +18,7 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from models.recognizer import IMAGENET_MEAN, IMAGENET_STD, ResNetCRNN, letterbox_plate
 from utils.image_processing import imread_unicode
-from utils.plate_utils import normalize_iran_plate
+from utils.plate_utils import normalize_iran_plate, label_from_filename
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -119,21 +120,6 @@ def augment_plate(img: np.ndarray, rng: random.Random) -> np.ndarray:
 # Dataset
 # --------------------------------------------------------------------------- #
 
-def label_from_filename(path: Path) -> str:
-    """Recover the plate text from a filename.
-
-    prepare_dataset writes duplicates as `<plate>_2.jpg`. The old loader used the
-    raw stem, so every one of those (2268 of 25835 files) failed the charset
-    check and was silently dropped from training.
-    """
-    stem = path.stem
-    if "_" in stem:
-        head, _, tail = stem.rpartition("_")
-        if head and tail.isdigit():
-            stem = head
-    return normalize_iran_plate(stem)
-
-
 class PlateOCRDataset(Dataset):
     def __init__(
         self,
@@ -212,6 +198,8 @@ def split_by_plate(
     train and validation. The model then scores itself on pictures it has
     effectively memorised and the reported CER comes out better than the truth.
     """
+    if not 0 < val_split < 1:
+        raise ValueError("val_split must be between 0 and 1")
     by_plate: Dict[str, List[Tuple[Path, str]]] = defaultdict(list)
     for item in samples:
         by_plate[item[1]].append(item)
@@ -222,7 +210,7 @@ def split_by_plate(
     target = len(samples) * val_split
     val: List[Tuple[Path, str]] = []
     val_plates = set()
-    for plate in plates:
+    for plate in plates[:-1]:
         if len(val) >= target:
             break
         val.extend(by_plate[plate])
@@ -315,6 +303,7 @@ def plate_letter(text: str) -> str:
     return ""
 
 
+@torch.inference_mode()
 def evaluate(model, loader, charset: str, device) -> Tuple[float, float, Dict[str, Tuple[int, int]]]:
     """Return (character error rate, exact-match accuracy, per-letter tally).
 
@@ -323,6 +312,7 @@ def evaluate(model, loader, charset: str, device) -> Tuple[float, float, Dict[st
     letter with 2% of the training mass can be read wrong every single time
     while the headline number still looks respectable.
     """
+    was_training = model.training
     model.eval()
     total_chars = total_dist = correct = seen = 0
     per_letter: Dict[str, List[int]] = defaultdict(lambda: [0, 0])
@@ -343,7 +333,7 @@ def evaluate(model, loader, charset: str, device) -> Tuple[float, float, Dict[st
             if letter:
                 per_letter[letter][0] += int(plate_letter(pred) == letter)
                 per_letter[letter][1] += 1
-    model.train()
+    model.train(was_training)
     tally = {k: (v[0], v[1]) for k, v in per_letter.items()}
     return (total_dist / max(total_chars, 1)), (correct / max(seen, 1)), tally
 
@@ -383,14 +373,26 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
     epochs = int(train_cfg.get("epochs", 60))
     batch_size = int(train_cfg.get("batch", 32))
     workers = int(train_cfg.get("workers", 4))
+    if epochs < 1 or batch_size < 1 or workers < 0:
+        raise ValueError("epochs and batch must be positive; workers must be nonnegative")
 
-    samples = scan_samples(Path(data_root), charset)
+    data_path = Path(data_root)
+    samples = scan_samples(data_path / "train" if (data_path / "train").is_dir() else data_path, charset)
     if not samples:
         raise FileNotFoundError(f"No usable samples under {data_root}. Run prepare_dataset first.")
 
-    train_samples, val_samples = split_by_plate(
-        samples, float(train_cfg.get("val_split", 0.05)), seed=1337
-    )
+    if (data_path / "val").is_dir():
+        val_samples = scan_samples(data_path / "val", charset)
+        val_labels = {label for _, label in val_samples}
+        train_samples = [sample for sample in samples if sample[1] not in val_labels]
+        if not train_samples or not val_samples:
+            raise ValueError("Empty train/validation split after removing overlapping plates")
+    else:
+        train_samples, val_samples = split_by_plate(
+            samples, float(train_cfg.get("val_split", 0.05)), seed=1337
+        )
+    if not train_samples or not val_samples:
+        raise ValueError("Training requires nonempty train and validation sets with distinct plates")
     print(f"Train: {len(train_samples)} | Val: {len(val_samples)} | device: {device}")
 
     common = dict(charset=charset, img_height=rec_cfg["img_height"], img_width=rec_cfg["img_width"])
@@ -405,13 +407,13 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
         weights = letter_balanced_weights(train_samples, balance, focus_letters)
         sampler = WeightedRandomSampler(weights, num_samples=len(train_samples), replacement=True)
         train_loader = DataLoader(
-            train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, **loader_kwargs
+            train_ds, batch_size=batch_size, sampler=sampler, drop_last=False, **loader_kwargs
         )
         print(f"letter-balanced sampling on (strength {balance}"
               + (f", boosting {focus_letters}" if focus_letters else "") + ")")
     else:
         train_loader = DataLoader(
-            train_ds, batch_size=batch_size, shuffle=True, drop_last=True, **loader_kwargs
+            train_ds, batch_size=batch_size, shuffle=True, drop_last=False, **loader_kwargs
         )
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
@@ -453,7 +455,14 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
     target_path = Path(rec_cfg["model_path"])
     target_path.parent.mkdir(parents=True, exist_ok=True)
     last_tally: Dict[str, Tuple[int, int]] = {}
+    history = []
+    manifest = {"train": [[str(p.resolve()), label] for p, label in train_samples],
+                "val": [[str(p.resolve()), label] for p, label in val_samples]}
+    target_path.with_suffix(".split.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     best_cer = float("inf")
+    stale_epochs = 0
+    patience = int(train_cfg.get("patience", 12))
     checked_timesteps = False
 
     model.train()
@@ -470,7 +479,7 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
             if not checked_timesteps:
                 # CTC cannot represent a label longer than the sequence it emits;
                 # fail loudly here rather than train for hours toward nothing.
-                longest = max(len(lbl) for _, lbl in train_samples)
+                longest = max(len(lbl) + sum(a == b for a, b in zip(lbl, lbl[1:])) for _, lbl in train_samples)
                 if logits.size(1) < longest:
                     raise ValueError(
                         f"Only {logits.size(1)} CTC timesteps for labels up to {longest} chars. "
@@ -502,7 +511,11 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
             # Checkpoint on validation, not at the final epoch: the last epoch is
             # rarely the best one, and the old script only ever saved that.
             best_cer = cer
-            torch.save(model.state_dict(), target_path)
+            torch.save({"model": model.state_dict(), "charset": charset,
+                        "backbone": rec_cfg.get("backbone", "resnet18"),
+                        "img_height": rec_cfg["img_height"], "img_width": rec_cfg["img_width"],
+                        "epoch": epoch, "val_cer": cer, "train_cer": train_cer}, target_path)
+            stale_epochs = 0
             flag = "  <- saved"
 
         site_note = ""
@@ -515,16 +528,25 @@ def train(config_path: str = "configs/config.yaml", data_root: str = "data/ocr_d
             f"Epoch {epoch:03d} | loss {avg_loss:.4f} | train CER {train_cer:.4f} | val CER {cer:.4f} "
             f"| plate acc {acc:.4f}{site_note}{flag}"
         )
+        history.append({"epoch": epoch, "loss": avg_loss, "train_cer": train_cer,
+                        "val_cer": cer, "plate_accuracy": acc})
+        target_path.with_suffix(".history.json").write_text(
+            json.dumps(history, indent=2), encoding="utf-8")
         last_tally = tally
+        if not flag:
+            stale_epochs += 1
+        if patience > 0 and stale_epochs >= patience:
+            print(f"Early stopping after {patience} epochs without validation improvement")
+            break
 
     print(f"\nBest val CER: {best_cer:.4f}")
     gap = cer - train_cer
     verdict = (
-        "underfitting - more capacity or more epochs would help"
+        "high training error; inspect optimization and labels before changing model size"
         if train_cer > 0.05 and gap < 0.05
-        else "overfitting - more data or stronger augmentation, not a bigger model"
+        else "large generalization gap; investigate overfitting, labels and domain shift"
         if gap > 0.10
-        else "balanced"
+        else "no large gap detected by this heuristic; not proof against overfitting"
     )
     print(f"Final train CER {train_cer:.4f} vs val CER {cer:.4f}  (gap {gap:+.4f}) -> {verdict}")
     print("\nPer-letter accuracy on the final epoch:")

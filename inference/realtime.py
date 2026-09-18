@@ -13,7 +13,7 @@ from models.detector import PlateDetector
 from models.pipeline import LPRPipeline, PlateResult, PlateVoter
 from models.recognizer import PlateRecognizer
 from utils.database import VehicleDB
-from utils.overlay import TextItem, TextRenderer, draw_panel
+from utils.overlay import TextItem, TextRenderer, draw_panel, configure_qt_fonts
 from utils.plate_utils import format_plate_display
 from utils.plate_saver import PlateSaver
 
@@ -24,94 +24,7 @@ WHITE = (255, 255, 255)
 GREY = (180, 180, 180)
 
 
-class FrameGrabber:
-    """Reads the camera on its own thread and keeps only the newest frame.
-
-    An RTSP camera buffers frames the reader does not consume. If detection is
-    slower than the stream, the queue grows and the gate ends up recognising a
-    truck that left minutes ago. Dropping stale frames keeps the display live.
-    """
-
-    def __init__(self, source, width: int, height: int, fps: int = 0,
-                 reconnect_delay: float = 2.0) -> None:
-        self.source = source
-        self.width = width
-        self.height = height
-        self.fps = int(fps or 0)
-        self.reconnect_delay = reconnect_delay
-        self._frame: Optional[np.ndarray] = None
-        # Monotonic counter so the consumer can tell a fresh frame from the one
-        # it already processed. Without it the loop re-reads the same buffer.
-        self._seq = 0
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self.connected = False
-
-    def _open(self) -> Optional[cv2.VideoCapture]:
-        cap = cv2.VideoCapture(self.source)
-        if not cap.isOpened():
-            cap.release()
-            return None
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        if self.fps > 0:
-            # Asking the camera for the configured rate stops the grab thread
-            # spinning faster than the sensor actually delivers.
-            cap.set(cv2.CAP_PROP_FPS, self.fps)
-        # Keep the driver-side buffer minimal so we stay close to real time.
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        return cap
-
-    def _loop(self) -> None:
-        cap: Optional[cv2.VideoCapture] = None
-        while not self._stop.is_set():
-            if cap is None:
-                cap = self._open()
-                if cap is None:
-                    self.connected = False
-                    # A dropped link at a mine gate must not kill the process;
-                    # keep retrying until the camera comes back.
-                    self._stop.wait(self.reconnect_delay)
-                    continue
-                self.connected = True
-
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                cap.release()
-                cap = None
-                self.connected = False
-                continue
-
-            with self._lock:
-                self._frame = frame
-                self._seq += 1
-
-        if cap is not None:
-            cap.release()
-
-    def start(self) -> "FrameGrabber":
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-        return self
-
-    def read(self) -> Tuple[Optional[np.ndarray], int]:
-        """Return the newest frame and its sequence number.
-
-        The caller compares the sequence against the last one it processed. The
-        camera delivers ~30 frames a second while the loop can spin far faster,
-        so without this the same frame is recognised repeatedly and each pass
-        casts another vote -- letting one frame alone satisfy `min_votes`.
-        """
-        with self._lock:
-            if self._frame is None:
-                return None, self._seq
-            return self._frame.copy(), self._seq
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=3.0)
+from utils.camera import FrameGrabber
 
 
 class RealtimeLPR:
@@ -156,6 +69,7 @@ class RealtimeLPR:
         self.saver: Optional[PlateSaver] = None
         if cap_cfg.get("enabled", True):
             self.saver = PlateSaver(
+                db=self.db,
                 output_dir=cap_cfg.get("output_dir", "captures"),
                 save_full_frame=cap_cfg.get("save_full_frame", True),
                 save_raw=cap_cfg.get("save_raw", True),
@@ -198,6 +112,8 @@ class RealtimeLPR:
         self.thickness = disp_cfg["thickness"]
         self.hold_seconds = float(disp_cfg.get("hold_seconds", 5.0))
         self.renderer = TextRenderer(disp_cfg.get("font_path"))
+
+        configure_qt_fonts(self.renderer.font_path)
 
         self.last_result: Optional[PlateResult] = None
         self.last_confirmed_at = 0.0
@@ -248,7 +164,7 @@ class RealtimeLPR:
             draw_panel(out, (12, 12), (12 + 30 * self.base_size, 24 + panel_lines * line_h))
 
         if plate_text:
-            label = format_plate_display(plate_text)
+            label = format_plate_display(plate_text, bidi=True)
             status = "" if (held and held.confirmed) else "  (در حال تایید)"
             items.append(
                 (f"پلاک: {label}  [{result.ocr_conf:.2f}]{status}", (24, y), self.base_size, YELLOW)
@@ -293,16 +209,15 @@ class RealtimeLPR:
 
     def run(self) -> None:
         self.grabber.start()
-        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
-        if self.fullscreen:
-            cv2.setWindowProperty(self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
         last_tick = time.monotonic()
         last_seq = -1
         last_draw = 0.0
         result = PlateResult(None, None, None, 0.0, 0.0, False)
 
         try:
+            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+            if self.fullscreen:
+                cv2.setWindowProperty(self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
             while True:
                 frame, seq = self.grabber.read()
                 if frame is None:

@@ -13,6 +13,7 @@ from utils.plate_utils import (
     format_plate_display,
     is_valid_iran_plate,
     normalize_iran_plate,
+    label_from_filename,
     parse_iran_plate,
     repair_plate,
 )
@@ -151,20 +152,18 @@ class TestAgainstRealDataset:
         if not root.is_dir():
             pytest.skip("data/ocr_dataset not built")
 
-        files = [p for p in root.iterdir() if p.suffix.lower() == ".jpg"]
+        files = [p for p in root.rglob("*") if p.suffix.lower() == ".jpg"]
         if not files:
             pytest.skip("data/ocr_dataset is empty")
 
         usable = 0
+        rejected = []
         for path in files:
-            stem = path.stem
-            if "_" in stem:
-                head, _, tail = stem.rpartition("_")
-                if head and tail.isdigit():
-                    stem = head
-            label = normalize_iran_plate(stem)
+            label = label_from_filename(path)
             if 5 <= len(label) <= 10 and all(c in charset for c in label):
                 usable += 1
+            elif len(rejected) < 20:
+                rejected.append((path.name, label))
 
         ratio = usable / len(files)
-        assert ratio > 0.99, f"only {ratio:.1%} of labels are usable"
+        assert ratio > 0.99, f"only {ratio:.1%} of labels are usable; examples: {rejected!r}"
