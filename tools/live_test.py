@@ -344,7 +344,7 @@ class LiveTester:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default="configs/config.yaml")
-    parser.add_argument("--source", default="0", help="camera index or video path")
+    parser.add_argument("--source", default="rtsp://admin:admin@172.16.18.17:554/snl/live/1/1", help="camera index or video path")
     parser.add_argument("--image", default=None, help="run once on a still image instead")
     parser.add_argument(
         "--ocr-only",

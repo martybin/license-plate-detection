@@ -38,13 +38,12 @@ class PlateDetector:
         self.max_det = max_det
         self.use_half = half and self.device == "cuda"
 
-        # Ultralytics renamed `half` to `quantize` in 8.4 and warns on every
-        # predict call for the old name -- 30 lines a second into journalctl on a
-        # live gate. Resolve the supported name once and only pass it when fp16
-        # is actually wanted.
+        # New Ultralytics versions use a precision value for `quantize`, not
+        # the boolean accepted by the legacy `half` option.
         self._predict_extra = {}
         if self.use_half:
-            self._predict_extra[self._half_kwarg()] = True
+            key = self._half_kwarg()
+            self._predict_extra[key] = "fp16" if key == "quantize" else True
 
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
